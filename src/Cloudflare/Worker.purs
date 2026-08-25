@@ -1,6 +1,5 @@
 module Cloudflare.Worker
-  ( Handlers
-  , ObjectBinding
+  ( ObjectBinding
   , Plan
   , Request
   , Response
@@ -33,6 +32,7 @@ import Cloudflare.Static as Static
 import Control.Alt ((<|>))
 import Control.Monad.Maybe.Trans (MaybeT(..), runMaybeT)
 import Control.Plus (empty)
+import Control.Apply (lift2)
 import Control.Promise (Promise, fromAff, toAffE)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
@@ -79,12 +79,17 @@ ref = WorkerRef
 scriptName :: WorkerRef -> String
 scriptName (WorkerRef name) = name
 
-type Handlers = { fetch :: Request -> Aff Response }
+newtype Worker = Worker (WorkerInit Route)
 
-newtype Worker = Worker { plan :: Plan, build :: Foreign -> Effect Handlers }
+-- | `a <> b` binds what both bind and tries `a`'s routes first.
+instance semigroupWorker :: Semigroup Worker where
+  append (Worker a) (Worker b) = Worker $ lift2 append a b
 
-make :: WorkerInit Handlers -> Worker
-make init = Worker { plan: Static.plan init, build: Static.build init }
+instance monoidWorker :: Monoid Worker where
+  mempty = Worker $ pure mempty
+
+make :: WorkerInit Route -> Worker
+make = Worker
 
 -- | `a <> b` tries `a`, then `b`. `mempty` matches nothing.
 newtype Route = Route (Request -> MaybeT Aff Response)
@@ -105,28 +110,29 @@ serve (Route handler) request = runMaybeT (handler request) <#> case _ of
   Nothing -> text 404 "not found"
 
 plan :: Worker -> Plan
-plan (Worker w) = w.plan
+plan (Worker w) = Static.plan w
 
 toExport :: Worker -> Foreign
 toExport (Worker w) = toExportImpl \env -> do
-  handlers <- w.build env
-  pure { fetch: fromAff <<< handlers.fetch }
+  routes <- Static.build w env
+  pure { fetch: fromAff <<< serve routes }
 
 wranglerConfig
   :: { name :: String, main :: String, compatibilityDate :: String, assets :: Maybe String }
   -> Worker
   -> Json
-wranglerConfig options (Worker w) = J.fromObject $ Object.fromFoldable $
+wranglerConfig options worker = J.fromObject $ Object.fromFoldable $
   [ "name" /\ J.fromString options.name
   , "main" /\ J.fromString options.main
   , "compatibility_date" /\ J.fromString options.compatibilityDate
-  , "durable_objects" /\ J.fromObject (Object.singleton "bindings" (J.fromArray (bindingJson <$> w.plan.objects)))
+  , "durable_objects" /\ J.fromObject (Object.singleton "bindings" (J.fromArray (bindingJson <$> objects)))
   , "exports" /\ J.fromObject (Object.fromFoldable (exportJson <$> hosted))
   ] <> case options.assets of
     Just directory -> [ "assets" /\ J.fromObject (Object.singleton "directory" (J.fromString directory)) ]
     Nothing -> []
   where
-  hosted = w.plan.objects # Array.filter (\o -> o.scriptName == Nothing)
+  objects = Array.nubEq (plan worker).objects
+  hosted = objects # Array.filter (\o -> o.scriptName == Nothing)
 
   bindingJson o = J.fromObject $ Object.fromFoldable $
     [ "name" /\ J.fromString o.binding, "class_name" /\ J.fromString o.className ]

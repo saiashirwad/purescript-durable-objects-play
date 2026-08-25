@@ -9,7 +9,7 @@ module Cloudflare.Durable
 
 import Prelude
 
-import Cloudflare.Durable.Core (Handlers, Live, Manifest, Namespace, Object, ObjectId, className, get, getByName, idFromName, idFromString, idToString, implement, implementWith, manifest, newUniqueId, object) as Core
+import Cloudflare.Durable.Core (Handlers, Live, Manifest, Namespace, Object, ObjectId, className, get, getByName, idFromName, idFromString, idToString, implement, implementWith, loopback, manifest, newUniqueId, object) as Core
 import Cloudflare.Durable.Core (Live(..), Object, className)
 import Cloudflare.Durable.Init (Init, Plan, state, variable) as Init
 import Cloudflare.Durable.Platform (namespaceFromBinding)

@@ -18,7 +18,8 @@ import Effect.Aff.Class (liftAff)
 import Effect.Class (liftEffect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
-import Example.Counter (counterLive)
+import Effect.Ref as Ref
+import Example.Counter (counter, counterLive)
 import Test.Ledger (LedgerError(..), ledgerLive)
 
 main :: Effect Unit
@@ -92,6 +93,19 @@ main = launchAff_ do
     _ <- byId.post { author: "ann", text: "only here" }
     other <- Rpc.infallible $ byName.history unit
     pure $ length other == 0 && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
+
+  check "loopback = connect after serve behaves as the implementation" do
+    cell <- liftEffect $ Ref.new 0
+    let
+      impl =
+        { increment: \_ -> liftEffect $ Ref.modify (_ + 1) cell
+        , get: \_ -> liftEffect $ Ref.read cell
+        }
+      wired = Durable.loopback counter impl
+    viaWire <- Rpc.run $ wired.increment unit
+    direct <- Rpc.run $ impl.increment unit
+    both <- Rpc.run $ wired.get unit
+    pure $ viaWire == Right 1 && direct == Right 2 && both == Right 2
 
   log "All tests passed."
 

@@ -16,6 +16,7 @@ module Cloudflare.Durable.Core
   , idToString
   , implement
   , implementWith
+  , loopback
   , manifest
   , namespace
   , newUniqueId
@@ -31,6 +32,7 @@ import Cloudflare.Durable.Runtime (Runtime)
 import Cloudflare.Durable.Runtime as Runtime
 import Data.Either (Either(..))
 import Data.Map (Map)
+import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Symbol (class IsSymbol, reflectSymbol)
 import Effect.Aff (Aff, error, throwError)
@@ -67,6 +69,15 @@ object spec = Object
 
 className :: forall name api. Object name api -> String
 className (Object o) = o.name
+
+-- | `connect` after `serve`: an implementation seen through the wire. The
+-- | simulator is this, one per id; the tests check it behaves as the
+-- | implementation.
+loopback :: forall name api. Object name api -> Record api -> Record api
+loopback (Object o) impl = o.connect \name request ->
+  case Map.lookup name (o.serve impl) of
+    Just handle -> handle request
+    Nothing -> throwError $ error $ o.name <> " has no method " <> show name
 
 type Handlers api = { methods :: Record api, alarm :: Maybe (Runtime Unit) }
 

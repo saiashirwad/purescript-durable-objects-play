@@ -1,5 +1,7 @@
 module Example.Api
   ( api
+  , chat
+  , counter
   ) where
 
 import Prelude
@@ -17,16 +19,19 @@ import Data.String (Pattern(..), split)
 import Example.Counter (CounterApi, counterLive)
 
 api :: Worker
-api = Worker.make ado
-  counters <- Durable.host counterLive
-  rooms <- Durable.host roomLive
-  in
-    { fetch: Worker.serve $
-        Http.route "/rpc" rooms
-          <> Http.route "/rpc" counters
-          <> counterValue counters
-    }
+api = chat <> counter
 
+chat :: Worker
+chat = Worker.make ado
+  rooms <- Durable.host roomLive
+  in Http.route "/rpc" rooms
+
+counter :: Worker
+counter = Worker.make ado
+  counters <- Durable.host counterLive
+  in Http.route "/rpc" counters <> counterValue counters
+
+-- | `GET /counter/:name`, the Worker calling the object itself.
 counterValue :: Namespace "Counter" CounterApi -> Route
 counterValue counters = Worker.route \request ->
   case Worker.method request, split (Pattern "/") (Worker.pathname request) of

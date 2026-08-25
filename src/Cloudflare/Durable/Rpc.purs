@@ -5,7 +5,6 @@ module Cloudflare.Durable.Rpc
   , RpcFailure(..)
   , fail
   , infallible
-  , mapError
   , method
   , methodWith
   , run
@@ -19,7 +18,7 @@ import Cloudflare.Durable.Runtime as Runtime
 import Control.Monad.Error.Class (class MonadError, class MonadThrow, throwError)
 import Control.Monad.Except (ExceptT(..), runExceptT, withExceptT)
 import Control.Monad.Rec.Class (class MonadRec)
-import Data.Bifunctor (lmap)
+import Data.Bifunctor (class Bifunctor, lmap)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Either (Either)
@@ -79,11 +78,11 @@ fail = throwError <<< DomainError
 run :: forall e a. Rpc e a -> Aff (Either (RpcFailure e) a)
 run (Rpc action) = runExceptT action
 
-mapError :: forall e e' a. (e -> e') -> Rpc e a -> Rpc e' a
-mapError f (Rpc action) = Rpc $ withExceptT (map f) action
+instance bifunctorRpc :: Bifunctor Rpc where
+  bimap f g (Rpc action) = Rpc $ map g $ withExceptT (map f) action
 
 infallible :: forall e a. Rpc NoError a -> Rpc e a
-infallible = mapError \(NoError v) -> absurd v
+infallible = lmap \(NoError v) -> absurd v
 
 newtype Method e req res = Method
   { request :: JsonCodec req
