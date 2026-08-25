@@ -23,6 +23,8 @@ data Message
   | Assistant { text :: Maybe String, toolCalls :: Array ToolCall }
   | ToolResult { callId :: String, content :: String }
 
+derive instance eqMessage :: Eq Message
+
 newtype Prompt = Prompt (Array Message)
 
 derive newtype instance semigroupPrompt :: Semigroup Prompt

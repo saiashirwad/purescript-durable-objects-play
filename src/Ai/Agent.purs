@@ -20,7 +20,7 @@ module Ai.Agent
 
 import Prelude
 
-import Ai.Model (AiError(..), Model, complete)
+import Ai.Model (AiError(..), Finish(..), Model, complete)
 import Ai.Prompt (Message(..), Prompt(..), system, toolResult, user)
 import Ai.Schema (Schema)
 import Ai.Schema as Schema
@@ -97,12 +97,15 @@ mount model tools (Def d) = Agent $ Star \input -> do
   round { transcript, left } = do
     reply <- ExceptT $ complete model { prompt: transcript, tools: descriptions, jsonOnly: d.jsonOnly }
     let transcript' = transcript <> Prompt [ reply.message ]
-    case reply.message of
-      Assistant { toolCalls } | toolCalls /= [] -> do
+    case reply.finish, reply.message of
+      ToolCalls, Assistant { toolCalls } -> do
         results <- for toolCalls \call ->
           ExceptT (Right <$> Tool.call tools call) >>= either
             (\why -> throwError $ ToolFailed { name: call.name, why })
             (pure <<< toolResult call.id <<< J.stringify)
         pure $ Loop { transcript: transcript' <> fold results, left: left - 1 }
-      Assistant { text: answer } -> Done <$> except (lmap BadReply $ d.parse $ fromMaybe "" answer)
-      _ -> throwError $ BadReply "model replied with a non-assistant message"
+      Stop, Assistant { text: answer } -> Done <$> except (lmap BadReply $ d.parse $ fromMaybe "" answer)
+      Length, _ -> throwError $ BadReply "reply cut off at the length limit"
+      Filtered, _ -> throwError $ BadReply "reply withheld by the content filter"
+      Other why, _ -> throwError $ BadReply $ "model stopped: " <> why
+      _, _ -> throwError $ BadReply "model replied with a non-assistant message"

@@ -104,9 +104,14 @@ echoLive = Durable.implementWith echo ado
         Container.request box 8080 request
     , alarm = Container.expire state box }
 
--- Agents: a Def names no model; mount attaches one and some tools.
+-- Agents: a Def names no model; mount attaches one and some tools. A model
+-- is a provider (data: url, auth, wire) plus a catalogue entry (data: what
+-- it can do); one wire serves every OpenAI-compatible provider.
+flash :: Model Aff
+flash = Provider.model Provider.deepseek key Catalogue.deepseekFlash
+
 assistant :: Agent Runtime String String
-assistant = mount (Model.hoist liftAff model) [ whoIsHere ] $ text "You are terse."
+assistant = mount (Model.hoist liftAff flash) [ whoIsHere ] $ text "You are terse."
 
 -- In tests, time is a Clock you advance; due alarms fire during `advance`.
 clock <- Simulator.clock
@@ -141,6 +146,8 @@ Where each idea lives, for reading later.
 | `Void` as the error of a call that cannot fail; `absurd` lifts it | `Rpc.NoError`, `Rpc.infallible` |
 | `Invariant`: a codec and a schema from one description | `Ai.Schema` |
 | An existential hides a tool's types so a toolkit is an array | `Ai.Tool` |
+| A wire format is two codecs; a provider is data over one; a model is data over a provider | `Ai.Wire.OpenAi`, `Ai.Provider`, `Ai.Catalogue` |
+| `ExceptT` with `except` / `withExceptT`: one straight-line error path | `Ai.Provider.modelWith` |
 | Natural transformations (`m ~> n`) move a model or tool between monads | `Ai.Model.hoist`, `Ai.Tool.hoist`, `Runtime.rethrow` |
 | A `Maybe` with reasons is a monad (`Signal`) | `Cloudflare.Durable.Events` |
 | `MonadRec` / `tailRecM`: loops that cannot blow the stack | `Container.ensure`, `Ai.Agent.mount` |

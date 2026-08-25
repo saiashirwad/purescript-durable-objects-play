@@ -6,7 +6,8 @@ module Example.Ask
 import Prelude
 
 import Ai (invoke, mount, text, tool)
-import Ai.DeepSeek as DeepSeek
+import Ai.Catalogue as Catalogue
+import Ai.Provider as Provider
 import Ai.Schema as Schema
 import Data.DateTime.Instant (toDateTime)
 import Data.Either (Either(..))
@@ -29,7 +30,7 @@ main = launchAff_ do
       \_ -> liftEffect do
         instant <- now
         pure { iso: either' $ formatDateTime "YYYY-MM-DDTHH:mm:ssZ" (toDateTime instant) }
-    assistant = mount (DeepSeek.model (DeepSeek.flash key)) [ clock ] $
+    assistant = mount (Provider.model Provider.deepseek key Catalogue.deepseekFlash) [ clock ] $
       text "You are terse. Use the clock tool when asked about time."
   answer <- invoke assistant "What time is it, and what's 17 * 23?"
   log case answer of

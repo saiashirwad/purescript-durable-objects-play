@@ -14,7 +14,8 @@ import Cloudflare.Durable.Simulator as Simulator
 import Cloudflare.Durable.Runtime as Runtime
 import Cloudflare.Durable (Signal(..))
 import Data.Variant (Variant, match)
-import Data.Either (Either(..))
+import Data.Either (Either(..), either)
+import Data.Traversable (traverse)
 import Effect (Effect)
 import Data.Array (length)
 import Data.String (take)
@@ -27,7 +28,13 @@ import Effect.Class (liftEffect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
 import Example.Counter (counter, counterLive)
-import Ai (AiError(..), Message(..), invoke, mount, structured, text, tool)
+import Ai (AiError(..), Finish(..), Message(..), ModelId(..), invoke, mount, structured, text, tool, user)
+import Ai.Catalogue as Catalogue
+import Ai.Provider (Auth(..))
+import Ai.Provider as Provider
+import Ai.Wire.OpenAi as OpenAi
+import Data.Codec.Argonaut as CA
+import Data.Argonaut.Parser (jsonParser)
 import Ai.Model as Model
 import Ai.Schema as Schema
 import Data.Argonaut.Core as J
@@ -214,8 +221,8 @@ main = launchAff_ do
   check "an agent runs the tool loop: call, result, answer" do
     called <- liftEffect $ Ref.new 0
     model <- Model.scripted
-      [ { message: Assistant { text: Nothing, toolCalls: [ { id: "c1", name: "members", arguments: J.jsonEmptyObject } ] }, finish: "tool_calls", usage: Nothing }
-      , { message: Assistant { text: Just "hi ann", toolCalls: [] }, finish: "stop", usage: Nothing }
+      [ { message: Assistant { text: Nothing, toolCalls: [ { id: "c1", name: "members", arguments: J.jsonEmptyObject } ] }, finish: ToolCalls, usage: Nothing }
+      , { message: Assistant { text: Just "hi ann", toolCalls: [] }, finish: Stop, usage: Nothing }
       ]
     let
       members = tool "members" "who is here" (Schema.object {}) (Schema.array Schema.string) \_ -> do
@@ -228,8 +235,8 @@ main = launchAff_ do
 
   check "structured agents decode the schema; agents compose as a Category" do
     model <- Model.scripted
-      [ { message: Assistant { text: Just "{\"n\": 3}", toolCalls: [] }, finish: "stop", usage: Nothing }
-      , { message: Assistant { text: Just "three", toolCalls: [] }, finish: "stop", usage: Nothing }
+      [ { message: Assistant { text: Just "{\"n\": 3}", toolCalls: [] }, finish: Stop, usage: Nothing }
+      , { message: Assistant { text: Just "three", toolCalls: [] }, finish: Stop, usage: Nothing }
       ]
     let
       counter' = mount model [] $ structured "Count." (Schema.object { n: Schema.int })
@@ -246,10 +253,42 @@ main = launchAff_ do
     answer <- invoke bad ""
     pure $ answer == Left (Misconfigured "duplicate tool names: [\"x\",\"x\"]")
 
+  check "a provider is data: url, auth and wire compose into one request" do
+    seen <- liftEffect $ Ref.new Nothing
+    let
+      canned = jsonParser """{"choices":[{"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}"""
+      post request = do
+        liftEffect $ Ref.write (Just request) seen
+        pure { status: 200, body: either (const J.jsonNull) identity canned }
+      acme = Provider.openAiCompatible "acme" "https://llm.acme.test/v1"
+      model = Provider.modelWith post acme "k-123" (Catalogue.unlisted "acme" (ModelId "acme-1"))
+      blind = Provider.modelWith post acme "k-123" (Catalogue.unlisted "acme" (ModelId "acme-1")) { tools = false }
+    reply <- Model.complete model { prompt: user "ping", tools: [], jsonOnly: false }
+    refused <- Model.complete blind { prompt: user "ping", tools: [ J.jsonEmptyObject ], jsonOnly: false }
+    request <- liftEffect $ Ref.read seen
+    pure $ (request <#> _.url) == Just "https://llm.acme.test/v1/chat/completions"
+      && (request <#> _.headers) == Just [ { name: "authorization", value: "Bearer k-123" } ]
+      && (request <#> CA.decode OpenAi.request <<< _.body) == Just (Right { model: "acme-1", messages: [ User "ping" ], tools: Nothing, response_format: Nothing })
+      && reply == Right { message: Assistant { text: Just "pong", toolCalls: [] }, finish: Stop, usage: Just { prompt: 3, completion: 1 } }
+      && refused == Left (Misconfigured "acme/acme-1 cannot call tools")
+      && Provider.authorize (Header "x-api-key") "k" { url: "u", headers: [] } == { url: "u", headers: [ { name: "x-api-key", value: "k" } ] }
+      && Provider.authorize (Query "key") "k" { url: "u", headers: [] } == { url: "u?key=k", headers: [] }
+
+  check "the openai wire round-trips every message shape, tool arguments included" do
+    let
+      transcript =
+        [ System "be brief"
+        , User "hi"
+        , Assistant { text: Nothing, toolCalls: [ { id: "c1", name: "members", arguments: J.jsonEmptyObject } ] }
+        , ToolResult { callId: "c1", content: "[\"ann\"]" }
+        , Assistant { text: Just "just ann", toolCalls: [] }
+        ]
+    pure $ traverse (CA.decode OpenAi.message <<< CA.encode OpenAi.message) transcript == Right transcript
+
   check "a post mentioning @ai is answered from the alarm, with a tool call" do
     model <- Model.scripted
-      [ { message: Assistant { text: Nothing, toolCalls: [ { id: "c1", name: "members", arguments: J.jsonEmptyObject } ] }, finish: "tool_calls", usage: Nothing }
-      , { message: Assistant { text: Just "hello ann, just us two", toolCalls: [] }, finish: "stop", usage: Nothing }
+      [ { message: Assistant { text: Nothing, toolCalls: [ { id: "c1", name: "members", arguments: J.jsonEmptyObject } ] }, finish: ToolCalls, usage: Nothing }
+      , { message: Assistant { text: Just "hello ann, just us two", toolCalls: [] }, finish: Stop, usage: Nothing }
       ]
     bots <- Simulator.simulateWith
       (Simulator.noContainer { variables = Map.singleton "DEEPSEEK_API_KEY" "test-key" })

@@ -1,8 +1,8 @@
 // Works in Node 18+ and in Workers. Non-JSON bodies come back as a string.
-export const postJson = (url) => (key) => (body) => () =>
+export const postImpl = ({ url, headers, body }) => () =>
   fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    headers: { "content-type": "application/json", ...Object.fromEntries(headers.map((h) => [h.name, h.value])) },
     body: JSON.stringify(body),
   }).then(async (response) => {
     const text = await response.text();

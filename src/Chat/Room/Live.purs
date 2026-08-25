@@ -7,8 +7,9 @@ module Chat.Room.Live
 import Prelude
 
 import Ai (Agent, Def, Model, invoke, mount, text, tool)
-import Ai.DeepSeek as DeepSeek
+import Ai.Catalogue as Catalogue
 import Ai.Model as Model
+import Ai.Provider as Provider
 import Ai.Schema as Schema
 import Chat.Markdown as Markdown
 import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), Reaction, RoomApi, RoomEvents, maxTextLength, room)
@@ -80,7 +81,7 @@ channels all =
   }
 
 roomLive :: Live "Room" RoomApi RoomEvents
-roomLive = roomLiveWith (DeepSeek.model <<< DeepSeek.flash)
+roomLive = roomLiveWith \key -> Provider.model Provider.deepseek key Catalogue.deepseekFlash
 
 -- | The room, given how to build a model from the API key. Tests pass a
 -- | scripted one.

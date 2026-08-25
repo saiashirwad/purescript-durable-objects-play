@@ -1,10 +1,12 @@
 -- | A language model as a capability: one function from a completion to a
--- | reply. Providers build one; `hoist` moves it between monads; `scripted`
--- | answers from a list, for tests.
+-- | reply. `Ai.Provider` builds one; `hoist` moves it between monads;
+-- | `scripted` answers from a list, for tests.
 module Ai.Model
   ( AiError(..)
   , Completion
+  , Finish(..)
   , Model(..)
+  , ModelId(..)
   , Reply
   , Usage
   , complete
@@ -19,8 +21,18 @@ import Data.Argonaut.Core (Json)
 import Data.Array (uncons)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
+import Data.Newtype (class Newtype)
 import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Ref as Ref
+
+newtype ModelId = ModelId String
+
+derive instance newtypeModelId :: Newtype ModelId _
+derive newtype instance eqModelId :: Eq ModelId
+derive newtype instance ordModelId :: Ord ModelId
+
+instance showModelId :: Show ModelId where
+  show (ModelId id) = "(ModelId " <> show id <> ")"
 
 type Usage = { prompt :: Int, completion :: Int }
 
@@ -30,10 +42,25 @@ type Completion =
   , jsonOnly :: Boolean
   }
 
-type Reply = { message :: Message, finish :: String, usage :: Maybe Usage }
+-- | Why the model stopped, the same across wires.
+data Finish = Stop | ToolCalls | Length | Filtered | Other String
 
+derive instance eqFinish :: Eq Finish
+
+instance showFinish :: Show Finish where
+  show = case _ of
+    Stop -> "Stop"
+    ToolCalls -> "ToolCalls"
+    Length -> "Length"
+    Filtered -> "Filtered"
+    Other why -> "(Other " <> show why <> ")"
+
+type Reply = { message :: Message, finish :: Finish, usage :: Maybe Usage }
+
+-- | `Transport` never reached the server; `Rejected` did, and it said no.
 data AiError
   = Transport String
+  | Rejected { status :: Int, body :: String }
   | BadReply String
   | ToolFailed { name :: String, why :: String }
   | TooManyRounds Int
@@ -44,6 +71,7 @@ derive instance eqAiError :: Eq AiError
 instance showAiError :: Show AiError where
   show = case _ of
     Transport why -> "Transport " <> show why
+    Rejected r -> "Rejected " <> show r
     BadReply why -> "BadReply " <> show why
     ToolFailed r -> "ToolFailed " <> show r
     TooManyRounds n -> "TooManyRounds " <> show n
