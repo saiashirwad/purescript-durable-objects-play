@@ -48,17 +48,18 @@ type RoomApi =
   ( post :: NewMessage -> Rpc PostError Message
   , history :: Unit -> Rpc NoError (Array Message)
   , members :: Unit -> Rpc NoError (Array String)
+  , typing :: String -> Rpc NoError Unit
   )
 
--- | Pushed to every open socket. `joined` and `left` carry the socket's tag,
--- | which the chat uses for the author's name.
+-- | Pushed to every open socket. `joined`, `left` and `typing` carry a name.
 type RoomEvents =
   ( message :: Message
   , joined :: String
   , left :: String
+  , typing :: String
   )
 
 room :: Object "Room" RoomApi RoomEvents
 room =
-  Durable.object { post: method, history: method, members: method }
-    `Durable.emitting` { message: Durable.event, joined: Durable.event, left: Durable.event }
+  Durable.object { post: method, history: method, members: method, typing: method }
+    `Durable.emitting` { message: Durable.event, joined: Durable.event, left: Durable.event, typing: Durable.event }

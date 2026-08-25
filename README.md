@@ -22,15 +22,16 @@ type RoomApi =
   ( post    :: NewMessage -> Rpc PostError Message
   , history :: Unit       -> Rpc NoError (Array Message)
   , members :: Unit       -> Rpc NoError (Array String)
+  , typing  :: String     -> Rpc NoError Unit
   )
 
 -- Pushed to every open WebSocket, typed as a row too.
-type RoomEvents = ( message :: Message, joined :: String, left :: String )
+type RoomEvents = ( message :: Message, joined :: String, left :: String, typing :: String )
 
 room :: Object "Room" RoomApi RoomEvents
 room =
-  Durable.object { post: method, history: method, members: method }
-    `Durable.emitting` { message: event, joined: event, left: event }
+  Durable.object { post: method, history: method, members: method, typing: method }
+    `Durable.emitting` { message: event, joined: event, left: event, typing: event }
 
 -- In the Worker: a real Durable Object stub.
 lobby :: Namespace "Room" RoomApi RoomEvents -> Aff (Either (RpcFailure PostError) (Array String))

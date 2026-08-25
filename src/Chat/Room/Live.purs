@@ -43,6 +43,7 @@ roomLive =
           posted = cmap (inj (Proxy :: Proxy "message")) sockets :: Sockets Message
           joined = cmap (inj (Proxy :: Proxy "joined")) sockets :: Sockets String
           left = cmap (inj (Proxy :: Proxy "left")) sockets :: Sockets String
+          typing = cmap (inj (Proxy :: Proxy "typing")) sockets :: Sockets String
         pure
           { methods:
               { post: \new -> do
@@ -61,6 +62,7 @@ roomLive =
                   pure message
               , history: \_ -> liftEffect $ Ref.read messages
               , members: \_ -> nub <<< map _.tag <$> Sockets.connected sockets
+              , typing: Sockets.broadcast typing
               }
           , alarm: mempty
           , connect: \socket -> Sockets.broadcast joined socket.tag

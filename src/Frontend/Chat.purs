@@ -24,6 +24,10 @@ import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Effect.Class (liftEffect)
+import Effect.Now (now)
+import Data.DateTime.Instant (unInstant)
+import Data.Newtype (unwrap)
+import Halogen.Subscription (makeEmitter)
 import Halogen as H
 import Halogen.Aff as HA
 import Halogen.HTML as HH
@@ -41,6 +45,7 @@ foreign import formatTime :: Number -> String
 foreign import nearBottom :: HTMLElement -> Effect Boolean
 foreign import scrollToEnd :: HTMLElement -> Effect Unit
 foreign import copyText :: String -> Effect Unit
+foreign import interval :: Int -> (Unit -> Effect Unit) -> Effect (Effect Unit)
 
 chat :: Chat
 chat = Chat.connect "/rpc"
@@ -62,8 +67,11 @@ type RoomView =
   , draft :: String
   , messages :: Map Int Message
   , feed :: H.SubscriptionId
+  , ticker :: H.SubscriptionId
   , online :: Boolean
   , members :: Array String
+  , typing :: Map String Number
+  , typingSentAt :: Number
   , error :: Maybe String
   , sending :: Boolean
   , copied :: Boolean
@@ -81,6 +89,7 @@ data Action
   | Submit Event
   | Notified (Signal (Variant RoomEvents))
   | Loaded { messages :: Array Message, members :: Array String }
+  | Tick
   | CopyLink
   | Leave
 
@@ -156,6 +165,7 @@ roomHeader author r =
         [ HH.span [ cls if r.online then "dot online" else "dot" ] []
         , HH.h1_ [ HH.text "Room" ]
         , HH.code [ cls "room-id", HP.title (Chat.printRoomId r.id) ] [ HH.text $ shortId r.id ]
+        , HH.span [ cls "hint online-count" ] [ HH.text $ onlineLabel r ]
         , HH.button [ cls "chip", HE.onClick \_ -> CopyLink ]
             [ linkIcon, HH.text if r.copied then "Copied" else "Copy link" ]
         ]
@@ -197,10 +207,32 @@ messageItem author (Tuple continued m) =
   side = if mine then "mine" else "theirs"
   headless = mine || continued
 
+onlineLabel :: RoomView -> String
+onlineLabel r
+  | not r.online = "connecting…"
+  | otherwise = case Array.length r.members of
+      1 -> "just you"
+      n -> show n <> " online"
+
+-- | "ann is typing", "ann and bob are typing", or "several people are typing".
+typingLine :: forall m. RoomView -> Html m
+typingLine r =
+  HH.div [ cls if Map.isEmpty r.typing then "typing" else "typing visible" ]
+    [ HH.span [ cls "dots" ] [ HH.i_ [], HH.i_ [], HH.i_ [] ]
+    , HH.span_ [ HH.text $ who $ Array.fromFoldable $ Map.keys r.typing ]
+    ]
+  where
+  who = case _ of
+    [] -> ""
+    [ a ] -> a <> " is typing"
+    [ a, b ] -> a <> " and " <> b <> " are typing"
+    _ -> "several people are typing"
+
 composer :: forall m. RoomView -> Html m
 composer r =
   HH.footer_
-    [ HH.form [ cls "composer", HE.onSubmit Submit ]
+    [ typingLine r
+    , HH.form [ cls "composer", HE.onSubmit Submit ]
         [ HH.input
             [ HP.placeholder "Message"
             , HP.autofocus true
@@ -297,9 +329,24 @@ handleAction = case _ of
     { author } <- H.get
     let room = Chat.open chat id
     feed <- H.subscribe $ Notified <$> Chat.listen chat id author
+    ticker <- H.subscribe $ Tick <$ makeEmitter (interval 1000)
     H.modify_ _
       { view = InRoom
-          { id, room, link, draft: "", messages: Map.empty, feed, online: false, members: [], error: Nothing, sending: false, copied: false }
+          { id
+          , room
+          , link
+          , draft: ""
+          , messages: Map.empty
+          , feed
+          , ticker
+          , online: false
+          , members: []
+          , typing: Map.empty
+          , typingSentAt: 0.0
+          , error: Nothing
+          , sending: false
+          , copied: false
+          }
       }
     focusComposer
 
@@ -314,19 +361,38 @@ handleAction = case _ of
     Delivered event -> event # match
       { message: \message -> do
           pinned <- withMessages nearBottom
-          inRoom \r -> r { messages = Map.insert message.id message r.messages }
+          inRoom \r -> r { messages = Map.insert message.id message r.messages, typing = Map.delete message.author r.typing }
           { author } <- H.get
           when (fromMaybe true pinned || message.author == author) $ void $ withMessages scrollToEnd
       , joined: \_ -> reload
-      , left: \_ -> reload
+      , left: \name -> do
+          inRoom \r -> r { typing = Map.delete name r.typing }
+          reload
+      , typing: \name -> do
+          { author } <- H.get
+          at <- liftEffect nowMs
+          when (name /= author) $ inRoom \r -> r { typing = Map.insert name at r.typing }
       }
+
+  -- Forget anyone who has not typed for a few seconds.
+  Tick -> do
+    at <- liftEffect nowMs
+    inRoom \r -> r { typing = Map.filter (\seen -> at - seen < typingTtl) r.typing }
 
   Loaded { messages, members } -> do
     -- Left-biased union: what we already hold wins over the reload.
     inRoom \r -> r { messages = Map.union r.messages (byId messages), members = members }
     void $ withMessages scrollToEnd
 
-  SetDraft draft -> inRoom _ { draft = draft }
+  SetDraft draft -> do
+    inRoom _ { draft = draft }
+    st <- H.get
+    at <- liftEffect nowMs
+    case st.view of
+      InRoom r | not null (trim draft), at - r.typingSentAt > typingThrottle -> do
+        inRoom _ { typingSentAt = at }
+        void $ liftAff $ Rpc.run $ r.room.typing st.author
+      _ -> pure unit
 
   CopyLink -> do
     st <- H.get
@@ -376,10 +442,13 @@ handleAction = case _ of
     case st.view of
       InRoom r -> do
         H.unsubscribe r.feed
+        H.unsubscribe r.ticker
         H.put $ next r st
       _ -> pure unit
 
   focusComposer = H.getHTMLElementRef composerRef >>= traverse_ (liftEffect <<< focus)
+
+  nowMs = unwrap <<< unInstant <$> now
 
   location = Window.location =<< window
   localStorage = Window.localStorage =<< window
@@ -396,3 +465,11 @@ withMessages act = H.getHTMLElementRef messagesRef >>= case _ of
 
 byId :: Array Message -> Map Int Message
 byId = Map.fromFoldable <<< map \m -> Tuple m.id m
+
+-- | How long a `typing` event keeps someone in the indicator, and how often
+-- | we send one while the draft changes.
+typingTtl :: Number
+typingTtl = 3500.0
+
+typingThrottle :: Number
+typingThrottle = 1500.0

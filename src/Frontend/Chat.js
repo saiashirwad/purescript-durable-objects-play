@@ -11,3 +11,8 @@ export const scrollToEnd = (el) => () => {
 export const copyText = (text) => () => {
   navigator.clipboard?.writeText(text);
 };
+
+export const interval = (ms) => (push) => () => {
+  const id = setInterval(() => push()(), ms);
+  return () => clearInterval(id);
+};

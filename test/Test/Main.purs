@@ -89,14 +89,15 @@ main = launchAff_ do
     let record log signal = Ref.modify_ (_ <> [ describe signal ]) log
     _ <- liftEffect $ Durable.listen rooms id "ann" (record annLog)
     stopBob <- liftEffect $ Durable.listen rooms id "bob" (record bobLog)
+    _ <- Rpc.run $ chat.typing "bob"
     _ <- Rpc.run $ chat.post { author: "ann", text: "hi" }
     members <- Rpc.run $ chat.members unit
     liftEffect stopBob
     after <- Rpc.run $ chat.members unit
     ann <- liftEffect $ Ref.read annLog
     bob <- liftEffect $ Ref.read bobLog
-    pure $ ann == [ "opened", "joined ann", "joined bob", "message hi", "left bob" ]
-      && bob == [ "opened", "joined bob", "message hi", "closed" ]
+    pure $ ann == [ "opened", "joined ann", "joined bob", "typing bob", "message hi", "left bob" ]
+      && bob == [ "opened", "joined bob", "typing bob", "message hi", "closed" ]
       && members == Right [ "ann", "bob" ]
       && after == Right [ "ann" ]
 
@@ -192,4 +193,5 @@ describe = case _ of
     { message: \m -> "message " <> m.text
     , joined: ("joined " <> _)
     , left: ("left " <> _)
+    , typing: ("typing " <> _)
     }
