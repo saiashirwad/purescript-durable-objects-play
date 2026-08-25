@@ -2,9 +2,6 @@
 
 Live at [durable-mini.texoport.workers.dev](https://durable-mini.texoport.workers.dev/).
 
-Declare an object once. The implementation, the Worker's stub, and the
-browser's stub all have the same record type.
-
 ```purescript
 type RoomApi =
   ( post    :: NewMessage -> Rpc PostError Message
