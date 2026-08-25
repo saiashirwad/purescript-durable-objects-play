@@ -9,7 +9,7 @@ module Cloudflare.Durable.Init
 
 import Prelude
 
-import Cloudflare.Durable.Runtime (Runtime, State, platformError)
+import Cloudflare.Durable.Runtime (RawSockets, Runtime, State, platformError)
 import Cloudflare.Static (Static, static)
 import Cloudflare.Static (build, plan) as Static
 import Data.Map (Map)
@@ -18,7 +18,7 @@ import Data.Maybe (Maybe(..))
 
 type Plan = { variables :: Array String }
 
-type Env = { state :: State, variables :: Map String String }
+type Env = { state :: State, variables :: Map String String, sockets :: RawSockets }
 
 type Init = Static Plan Env Runtime
 

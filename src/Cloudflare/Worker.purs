@@ -8,6 +8,7 @@ module Cloudflare.Worker
   , WorkerInit
   , WorkerRef
   , body
+  , header
   , json
   , make
   , method
@@ -39,6 +40,7 @@ import Data.Argonaut.Core as J
 import Data.Array as Array
 import Data.Tuple.Nested ((/\))
 import Data.Maybe (Maybe(..))
+import Data.Nullable (Nullable, toMaybe)
 import Effect (Effect)
 import Effect.Aff (Aff)
 import Foreign (Foreign)
@@ -52,6 +54,7 @@ foreign import pathname :: Request -> String
 foreign import text :: Int -> String -> Response
 foreign import json :: Int -> Json -> Response
 foreign import bodyImpl :: Request -> Effect (Promise Json)
+foreign import headerImpl :: Request -> String -> Nullable String
 foreign import variableImpl :: Foreign -> String -> Effect String
 foreign import bindingImpl :: Foreign -> String -> Effect Foreign
 foreign import toExportImpl :: (Foreign -> Effect { fetch :: Request -> Effect (Promise Response) }) -> Foreign
@@ -70,6 +73,9 @@ objectBinding b = static { objects: [ b ], variables: [] } \env -> bindingImpl e
 
 body :: Request -> Aff Json
 body = toAffE <<< bodyImpl
+
+header :: Request -> String -> Maybe String
+header request = toMaybe <<< headerImpl request
 
 newtype WorkerRef = WorkerRef String
 

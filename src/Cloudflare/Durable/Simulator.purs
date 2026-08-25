@@ -1,6 +1,6 @@
 -- | An in-memory Cloudflare. Each id gets its own instance, storage, SQLite
--- | database and alarm, activated on first use. Calls cross the codecs and
--- | the response envelope exactly as they do over the wire.
+-- | database, alarm and sockets, activated on first use. Calls cross the
+-- | codecs and the response envelope exactly as they do over the wire.
 -- |
 -- | Time is a `Clock` you advance by hand; due alarms fire during `advance`.
 -- | Objects sharing a clock share a timeline.
@@ -14,20 +14,23 @@ module Cloudflare.Durable.Simulator
 
 import Prelude
 
-import Cloudflare.Durable.Core (Activated, Id(..), Live, Namespace, activate, namespace)
+import Cloudflare.Durable.Core (Activated, Id(..), Listener, Live, Namespace, activate, namespace)
 import Cloudflare.Durable.Core as Core
-import Cloudflare.Durable.Runtime (State(..))
+import Cloudflare.Durable.Events (Signal(..))
+import Cloudflare.Durable.Runtime (Socket, State(..))
 import Data.Argonaut.Core (Json)
 import Data.Array (filter, reverse, take)
+import Data.Array as Array
 import Data.DateTime.Instant (Instant, instant, unInstant)
 import Data.Foldable (for_, traverse_)
+import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String (Pattern(..), stripPrefix)
 import Data.Time.Duration (Milliseconds)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Aff (Aff, error, throwError)
+import Effect.Aff (Aff, error, launchAff_, throwError)
 import Effect.Class (liftEffect)
 import Effect.Now (now)
 import Effect.Ref (Ref)
@@ -61,23 +64,29 @@ advance (Clock c) delta = do
   wakers <- liftEffect $ Ref.read c.wakers
   traverse_ (_ $ later) wakers
 
-simulate :: forall name api. Live name api -> Aff (Namespace name api)
+simulate :: forall name api events. Live name api events -> Aff (Namespace name api events)
 simulate live = clock >>= \c -> simulateOn c live
 
-type Instance = { activated :: Activated, alarm :: Ref (Maybe Instant) }
+type Instance =
+  { activated :: Activated
+  , alarm :: Ref (Maybe Instant)
+  , sockets :: Ref (Map String { socket :: Socket, deliver :: Listener })
+  }
 
-simulateOn :: forall name api. Clock -> Live name api -> Aff (Namespace name api)
+simulateOn :: forall name api events. Clock -> Live name api events -> Aff (Namespace name api events)
 simulateOn (Clock c) live@(Core.Live { object }) = do
   instances <- liftEffect $ Ref.new Map.empty
   counter <- liftEffect $ Ref.new 0
   let
     className = Core.className object
 
-    freshState = liftEffect do
+    fresh = liftEffect do
       storage <- Ref.new Map.empty
       db <- openMemory
       alarm <- Ref.new Nothing
+      sockets <- Ref.new Map.empty
       let
+        each f = liftEffect $ Ref.read sockets >>= traverse_ f
         state = State
           { get: \key -> liftEffect $ Map.lookup key <$> Ref.read storage
           , put: \key value -> liftEffect $ Ref.modify_ (Map.insert key value) storage
@@ -99,16 +108,21 @@ simulateOn (Clock c) live@(Core.Live { object }) = do
           , deleteAlarm: liftEffect $ Ref.write Nothing alarm
           , sql: \text bindings -> liftEffect $ exec db text bindings
           }
-      pure { state, alarm }
+        raw =
+          { broadcast: \json -> each \{ deliver } -> deliver (Delivered json)
+          , send: \socket json -> liftEffect $ Ref.read sockets >>= Map.lookup socket.id >>> traverse_ \{ deliver } -> deliver (Delivered json)
+          , connected: liftEffect $ map _.socket <<< Map.values >>> Array.fromFoldable <$> Ref.read sockets
+          }
+      pure { state, raw, alarm, sockets }
 
     instanceFor id = do
       existing <- liftEffect $ Map.lookup id <$> Ref.read instances
       case existing of
         Just found -> pure found
         Nothing -> do
-          { state, alarm } <- freshState
-          activated <- activate live { state, variables: Map.empty }
-          let created = { activated, alarm }
+          { state, raw, alarm, sockets } <- fresh
+          activated <- activate live { state, variables: Map.empty, sockets: raw }
+          let created = { activated, alarm, sockets }
           liftEffect $ Ref.modify_ (Map.insert id created) instances
           pure created
 
@@ -122,6 +136,22 @@ simulateOn (Clock c) live@(Core.Live { object }) = do
       n <- Ref.modify (_ + 1) counter
       pure $ Unique $ className <> "-" <> show n
 
+    listen id tag deliver = do
+      n <- Ref.modify (_ + 1) counter
+      let socket = { id: className <> "-socket-" <> show n, tag }
+      launchAff_ do
+        { activated, sockets } <- instanceFor id
+        liftEffect $ Ref.modify_ (Map.insert socket.id { socket, deliver }) sockets
+        liftEffect $ deliver Opened
+        activated.connect socket
+      pure $ launchAff_ do
+        { activated, sockets } <- instanceFor id
+        liftEffect $ Ref.modify_ (Map.delete socket.id) sockets
+        liftEffect $ deliver Closed
+        activated.disconnect socket
+
+    upgrade _ _ = throwError $ error "the simulator has no HTTP; use listen"
+
     wake at = do
       all <- liftEffect $ Map.values <$> Ref.read instances
       for_ all \{ activated, alarm } -> do
@@ -131,6 +161,6 @@ simulateOn (Clock c) live@(Core.Live { object }) = do
           activated.alarm
 
   liftEffect $ Ref.modify_ (_ <> [ wake ]) c.wakers
-  pure $ namespace object { call, unique }
+  pure $ namespace object { call, unique, listen, upgrade }
   where
   hasPrefix p key = p == "" || stripPrefix (Pattern p) key /= Nothing

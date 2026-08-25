@@ -22,7 +22,7 @@ import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
 
-counters :: Namespace "Counter" CounterApi
+counters :: Namespace "Counter" CounterApi ()
 counters = Http.connect "/rpc" counter
 
 type Entry = { name :: String, call :: String, outcome :: String }

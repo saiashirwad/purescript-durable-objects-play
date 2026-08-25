@@ -32,7 +32,7 @@ counter = Worker.make ado
   in Http.route "/rpc" counters <> counterValue counters
 
 -- | `GET /counter/:name`, the Worker calling the object itself.
-counterValue :: Namespace "Counter" CounterApi -> Route
+counterValue :: Namespace "Counter" CounterApi () -> Route
 counterValue counters = Worker.route \request ->
   case Worker.method request, split (Pattern "/") (Worker.pathname request) of
     "GET", [ "", "counter", name ] ->

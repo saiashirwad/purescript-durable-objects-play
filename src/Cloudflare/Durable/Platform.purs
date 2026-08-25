@@ -1,5 +1,6 @@
 module Cloudflare.Durable.Platform
   ( namespaceFromBinding
+  , socketsFromContext
   , stateFromContext
   , variablesFrom
   ) where
@@ -7,7 +8,8 @@ module Cloudflare.Durable.Platform
 import Prelude
 
 import Cloudflare.Durable.Core (Id(..), Namespace, Object, namespace)
-import Cloudflare.Durable.Runtime (Listing, State(..))
+import Cloudflare.Durable.Runtime (Listing, RawSockets, Socket, State(..))
+import Cloudflare.Worker (Request, Response)
 import Control.Promise (Promise, toAffE)
 import Data.Argonaut.Core (Json)
 import Data.DateTime.Instant (Instant, instant, unInstant)
@@ -19,6 +21,7 @@ import Data.Nullable (Nullable, toMaybe, toNullable)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff, error, throwError)
+import Effect.Exception (throwException)
 import Effect.Class (liftEffect)
 import Foreign (Foreign)
 import Foreign.Object as Object
@@ -36,6 +39,17 @@ foreign import sqlExec :: Foreign -> String -> Array Json -> Effect (Array Json)
 foreign import variables :: Foreign -> Array String -> Effect (Object.Object String)
 foreign import call :: Foreign -> { kind :: String, value :: String } -> String -> Json -> Effect (Promise Json)
 foreign import unique :: Foreign -> Effect String
+foreign import upgrade :: Foreign -> { kind :: String, value :: String } -> Request -> Effect (Promise Response)
+foreign import socketsBroadcast :: Foreign -> Json -> Effect Unit
+foreign import socketsSend :: Foreign -> String -> Json -> Effect Unit
+foreign import socketsConnected :: Foreign -> Effect (Array Socket)
+
+socketsFromContext :: Foreign -> RawSockets
+socketsFromContext ctx =
+  { broadcast: liftEffect <<< socketsBroadcast ctx
+  , send: \socket json -> liftEffect $ socketsSend ctx socket.id json
+  , connected: liftEffect $ socketsConnected ctx
+  }
 
 stateFromContext :: Foreign -> State
 stateFromContext ctx = State
@@ -63,10 +77,12 @@ toInstant ms = case instant (wrap ms) of
 variablesFrom :: Foreign -> Array String -> Effect (Map String String)
 variablesFrom env names = Map.fromFoldable <<< (Object.toUnfoldable :: _ -> Array _) <$> variables env names
 
-namespaceFromBinding :: forall name api. Object name api -> Foreign -> Namespace name api
+namespaceFromBinding :: forall name api events. Object name api events -> Foreign -> Namespace name api events
 namespaceFromBinding object ns = namespace object
   { call: \id method request -> toAffE $ call ns (encodeId id) method request
   , unique: liftEffect $ Unique <$> unique ns
+  , listen: \_ _ _ -> throwException $ error "listen is for browsers and the simulator; a Worker routes the upgrade with Http.route"
+  , upgrade: \id request -> toAffE $ upgrade ns (encodeId id) request
   }
   where
   encodeId = case _ of

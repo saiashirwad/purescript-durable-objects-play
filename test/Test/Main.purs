@@ -2,25 +2,27 @@ module Test.Main where
 
 import Prelude
 
-import Chat.Room (PostError(..))
+import Chat.Room (PostError(..), RoomEvents)
 import Chat.Room.Live (roomLive)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Rpc (Rpc, RpcFailure(..))
 import Cloudflare.Durable.Rpc as Rpc
 import Cloudflare.Durable.Simulator as Simulator
 import Cloudflare.Durable.Runtime as Runtime
+import Cloudflare.Durable (Signal(..))
+import Data.Variant (Variant, match)
 import Data.Either (Either(..))
 import Effect (Effect)
 import Data.Array (length)
 import Data.String (take)
 import Data.Maybe (Maybe(..))
 import Data.Time.Duration (Milliseconds(..))
-import Effect.Aff (Aff, delay, forkAff, joinFiber, launchAff_)
+import Effect.Ref as Ref
+import Effect.Aff (Aff, launchAff_)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (liftEffect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
-import Effect.Ref as Ref
 import Example.Counter (counter, counterLive)
 import Test.Journal (journalLive)
 import Test.Ledger (LedgerError(..), ledgerLive)
@@ -79,16 +81,24 @@ main = launchAff_ do
     result <- Rpc.run $ chat.post { author: "ann", text: "   " }
     pure $ result == Left (DomainError TextRequired)
 
-  check "since waits for the next post" do
-    let chat = Durable.getByName rooms "waiting"
-    _ <- Rpc.run $ chat.post { author: "ann", text: "before" }
-    waiter <- forkAff $ Rpc.run $ chat.since 1
-    delay $ Milliseconds 20.0
-    _ <- Rpc.run $ chat.post { author: "bob", text: "after" }
-    woken <- joinFiber waiter
-    pure case woken of
-      Right [ message ] -> message.text == "after" && message.id == 2
-      _ -> false
+  check "sockets get posts and presence; members tracks them" do
+    id <- Durable.newUniqueId rooms
+    let chat = Durable.get rooms id
+    annLog <- liftEffect $ Ref.new []
+    bobLog <- liftEffect $ Ref.new []
+    let record log signal = Ref.modify_ (_ <> [ describe signal ]) log
+    _ <- liftEffect $ Durable.listen rooms id "ann" (record annLog)
+    stopBob <- liftEffect $ Durable.listen rooms id "bob" (record bobLog)
+    _ <- Rpc.run $ chat.post { author: "ann", text: "hi" }
+    members <- Rpc.run $ chat.members unit
+    liftEffect stopBob
+    after <- Rpc.run $ chat.members unit
+    ann <- liftEffect $ Ref.read annLog
+    bob <- liftEffect $ Ref.read bobLog
+    pure $ ann == [ "opened", "joined ann", "joined bob", "message hi", "left bob" ]
+      && bob == [ "opened", "joined bob", "message hi", "closed" ]
+      && members == Right [ "ann", "bob" ]
+      && after == Right [ "ann" ]
 
   check "unique ids do not collide with names" $ succeeds do
     id <- liftAff $ Durable.newUniqueId rooms
@@ -172,3 +182,14 @@ succeeds :: forall e. Show e => Rpc e Boolean -> Aff Boolean
 succeeds call = Rpc.run call >>= case _ of
   Right passed -> pure passed
   Left failure -> liftEffect $ throw $ "unexpected failure: " <> show failure
+
+describe :: Signal (Variant RoomEvents) -> String
+describe = case _ of
+  Opened -> "opened"
+  Closed -> "closed"
+  Garbled why -> "garbled " <> why
+  Delivered event -> event # match
+    { message: \m -> "message " <> m.text
+    , joined: ("joined " <> _)
+    , left: ("left " <> _)
+    }

@@ -33,7 +33,7 @@ type LedgerApi =
   , balance :: Unit -> Rpc NoError Int
   )
 
-ledger :: Object "Ledger" LedgerApi
+ledger :: Object "Ledger" LedgerApi ()
 ledger = Durable.object
   { deposit: method
   , withdraw: methodWith { request: CA.int, success: CA.int, error: ledgerErrorCodec }
@@ -48,7 +48,7 @@ balanceKey = Storage.key "balance"
 poisonKey :: Storage.Key String
 poisonKey = Storage.key "balance"
 
-ledgerLive :: Live "Ledger" LedgerApi
+ledgerLive :: Live "Ledger" LedgerApi ()
 ledgerLive =
   Durable.implement ledger ado
     state <- Durable.state

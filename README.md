@@ -21,14 +21,19 @@ counter = Worker.make ado
 type RoomApi =
   ( post    :: NewMessage -> Rpc PostError Message
   , history :: Unit       -> Rpc NoError (Array Message)
-  , since   :: Int        -> Rpc NoError (Array Message)
+  , members :: Unit       -> Rpc NoError (Array String)
   )
 
-room :: Object "Room" RoomApi
-room = Durable.object { post: method, history: method, since: method }
+-- Pushed to every open WebSocket, typed as a row too.
+type RoomEvents = ( message :: Message, joined :: String, left :: String )
+
+room :: Object "Room" RoomApi RoomEvents
+room =
+  Durable.object { post: method, history: method, members: method }
+    `Durable.emitting` { message: event, joined: event, left: event }
 
 -- In the Worker: a real Durable Object stub.
-lobby :: Namespace "Room" RoomApi -> Aff (Either (RpcFailure PostError) (Array String))
+lobby :: Namespace "Room" RoomApi RoomEvents -> Aff (Either (RpcFailure PostError) (Array String))
 lobby ns = do
   id <- Durable.newUniqueId ns
   let stub = Durable.get ns id
@@ -39,8 +44,12 @@ lobby ns = do
     pure $ _.text <$> messages
 
 -- In the browser: the same Record RoomApi, over HTTP.
-rooms :: Namespace "Room" RoomApi
+rooms :: Namespace "Room" RoomApi RoomEvents
 rooms = Http.connect "/rpc" room
+
+-- ...and its events over a WebSocket that hibernates with the object.
+feed :: RoomId -> Emitter (Signal (Variant RoomEvents))
+feed id = makeEmitter $ Durable.listen rooms id "carol"
 
 say :: String -> String -> Aff (Either (RpcFailure PostError) Message)
 say roomId text = do
@@ -80,6 +89,21 @@ reminderLive = Durable.implementWith reminder ado
     , alarm: Storage.get state noteKey >>= traverse_ \note ->
         Storage.put state (fired `Storage.at` "0") note
     }
+
+-- Inside the object: sockets are a Contravariant channel. `cmap` narrows it
+-- to one event; `connect`/`disconnect` hooks are monoids like `alarm`.
+roomLive = Durable.implementWith room ado
+  state <- Durable.state
+  sockets <- Durable.sockets room
+  in do
+    let posted = cmap (inj (Proxy :: _ "message")) sockets :: Sockets Message
+    let joined = cmap (inj (Proxy :: _ "joined")) sockets :: Sockets String
+    pure
+      { methods: { post: \new -> do ... ; Sockets.broadcast posted message ; ... }
+      , alarm: mempty
+      , connect: \socket -> Sockets.broadcast joined socket.tag
+      , disconnect: mempty
+      }
 
 -- In tests, time is a Clock you advance; due alarms fire during `advance`.
 clock <- Simulator.clock

@@ -3,6 +3,7 @@ module Chat.Room
   , NewMessage
   , PostError(..)
   , RoomApi
+  , RoomEvents
   , maxTextLength
   , room
   ) where
@@ -43,17 +44,21 @@ instance hasCodecPostError :: HasCodec PostError where
 maxTextLength :: Int
 maxTextLength = 500
 
--- | `since n` returns messages with id above `n`, waiting for the next post
--- | if there are none; after 20 seconds it returns empty.
 type RoomApi =
   ( post :: NewMessage -> Rpc PostError Message
   , history :: Unit -> Rpc NoError (Array Message)
-  , since :: Int -> Rpc NoError (Array Message)
+  , members :: Unit -> Rpc NoError (Array String)
   )
 
-room :: Object "Room" RoomApi
-room = Durable.object
-  { post: method
-  , history: method
-  , since: method
-  }
+-- | Pushed to every open socket. `joined` and `left` carry the socket's tag,
+-- | which the chat uses for the author's name.
+type RoomEvents =
+  ( message :: Message
+  , joined :: String
+  , left :: String
+  )
+
+room :: Object "Room" RoomApi RoomEvents
+room =
+  Durable.object { post: method, history: method, members: method }
+    `Durable.emitting` { message: Durable.event, joined: Durable.event, left: Durable.event }

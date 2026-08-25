@@ -36,6 +36,7 @@ package:
     - tailrec
     - transformers
     - tuples
+    - variant
     - web-events
     - web-html
     - web-storage

@@ -1,7 +1,9 @@
 module Cloudflare.Durable.Runtime
   ( Listing
   , PlatformError(..)
+  , RawSockets
   , Runtime
+  , Socket
   , State(..)
   , class MonadRuntime
   , liftRuntime
@@ -52,6 +54,17 @@ newtype State = State
   , getAlarm :: Aff (Maybe Instant)
   , deleteAlarm :: Aff Unit
   , sql :: String -> Array Json -> Aff (Array Json)
+  }
+
+-- | One open WebSocket. `tag` is what the client connected as.
+type Socket = { id :: String, tag :: String }
+
+-- | The untyped socket surface a backend provides; `Cloudflare.Durable.Sockets`
+-- | types it with the object's event row.
+type RawSockets =
+  { broadcast :: Json -> Aff Unit
+  , send :: Socket -> Json -> Aff Unit
+  , connected :: Aff (Array Socket)
   }
 
 newtype Runtime a = Runtime (ExceptT PlatformError Aff a)

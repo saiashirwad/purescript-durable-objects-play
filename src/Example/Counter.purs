@@ -19,7 +19,7 @@ type CounterApi =
   , get :: Unit -> Rpc NoError Int
   )
 
-counter :: Object "Counter" CounterApi
+counter :: Object "Counter" CounterApi ()
 counter = Durable.object
   { increment: method
   , get: method
@@ -28,7 +28,7 @@ counter = Durable.object
 countKey :: Storage.Key Int
 countKey = Storage.key "count"
 
-counterLive :: Live "Counter" CounterApi
+counterLive :: Live "Counter" CounterApi ()
 counterLive =
   Durable.implement counter ado
     state <- Durable.state

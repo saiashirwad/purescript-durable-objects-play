@@ -28,7 +28,7 @@ type JournalApi =
   , reset :: Unit -> Rpc NoError Unit
   )
 
-journal :: Object "Journal" JournalApi
+journal :: Object "Journal" JournalApi ()
 journal = Durable.object
   { record: method
   , balance: method
@@ -68,7 +68,7 @@ mistyped = Sql.statement
   (Sql.param CA.string)
   (Sql.column "total" CA.string)
 
-journalLive :: Live "Journal" JournalApi
+journalLive :: Live "Journal" JournalApi ()
 journalLive =
   Durable.implement journal ado
     state <- Durable.state

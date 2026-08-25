@@ -1,6 +1,8 @@
 -- | `POST <prefix>/<class>/name/<id>/<method>` or `.../id/<hex>/<method>`,
 -- | body the encoded request, response the envelope.
 -- | `POST <prefix>/<class>/new` returns `{ "id": "<hex>" }`.
+-- | `GET <prefix>/<class>/id/<hex>/socket?tag=<tag>` upgrades to a WebSocket
+-- | that receives the object's events.
 -- | No authentication: put `route` behind your own.
 module Cloudflare.Durable.Http
   ( connect
@@ -9,7 +11,8 @@ module Cloudflare.Durable.Http
 
 import Prelude
 
-import Cloudflare.Durable.Core (Id(..), Namespace(..), Object, className, namespace)
+import Cloudflare.Durable.Core (Id(..), Listener, Namespace(..), Object, className, namespace)
+import Cloudflare.Durable.Events (Signal(..))
 import Data.Argonaut.Core as J
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
@@ -25,14 +28,18 @@ import Effect (Effect)
 import Effect.Aff (error, throwError)
 
 foreign import postJson :: String -> Json -> Effect (Promise Json)
+foreign import openSocket :: String -> Effect Unit -> Effect Unit -> (Json -> Effect Unit) -> (String -> Effect Unit) -> Effect (Effect Unit)
 
-route :: forall name api. String -> Namespace name api -> Route
+route :: forall name api events. String -> Namespace name api events -> Route
 route prefix (Namespace ns) = Worker.route \request ->
   case Worker.method request, path request of
     "POST", Just [ klass, kind, value, methodName ] | klass == ns.name, Just id <- decodeId kind value -> do
       body <- Worker.body request
       envelope <- ns.call id methodName body
       pure $ Just $ Worker.json 200 envelope
+    "GET", Just [ klass, kind, value, "socket" ]
+      | klass == ns.name, Just id <- decodeId kind value, Worker.header request "upgrade" == Just "websocket" ->
+          Just <$> ns.upgrade id request
     "POST", Just [ klass, "new" ] | klass == ns.name -> do
       id <- ns.unique
       pure $ Just $ Worker.json 200 $ CA.encode idCodec { id: idToString' id }
@@ -44,9 +51,12 @@ route prefix (Namespace ns) = Worker.route \request ->
   decodeId "id" value = Just $ Unique value
   decodeId _ _ = Nothing
 
-connect :: forall name api. String -> Object name api -> Namespace name api
+connect :: forall name api events. String -> Object name api events -> Namespace name api events
 connect prefix object = namespace object
   { call: \id methodName body -> toAffE $ postJson (url id methodName) body
+  , listen: \id tag (deliver :: Listener) ->
+      openSocket (url id "socket?tag=" <> tag) (deliver Opened) (deliver Closed) (deliver <<< Delivered) (deliver <<< Garbled)
+  , upgrade: \_ _ -> throwError $ error "upgrade is for Workers; a browser listens"
   , unique: do
       response <- toAffE $ postJson (base <> "/new") J.jsonNull
       case CA.decode idCodec response of

@@ -18,6 +18,8 @@ export const bindingImpl = (env) => (name) => () => {
 
 export const bodyImpl = (request) => () => request.json();
 
+export const headerImpl = (request) => (name) => request.headers.get(name);
+
 export const url = (request) => request.url;
 export const method = (request) => request.method;
 export const pathname = (request) => new URL(request.url).pathname;

@@ -54,3 +54,24 @@ export const call = (ns) => (id) => (method) => (request) => () => {
 };
 
 export const unique = (ns) => () => ns.newUniqueId().toString();
+
+export const upgrade = (ns) => (id) => (request) => () => {
+  const objectId =
+    id.kind === "named" ? ns.idFromName(id.value) : ns.idFromString(id.value);
+  return ns.get(objectId).fetch(request);
+};
+
+export const socketsBroadcast = (ctx) => (json) => () => {
+  const text = JSON.stringify(json);
+  for (const ws of ctx.getWebSockets()) {
+    try { ws.send(text); } catch {}
+  }
+};
+
+export const socketsSend = (ctx) => (id) => (json) => () => {
+  const text = JSON.stringify(json);
+  for (const ws of ctx.getWebSockets(id)) ws.send(text);
+};
+
+export const socketsConnected = (ctx) => () =>
+  ctx.getWebSockets().map((ws) => ws.deserializeAttachment());

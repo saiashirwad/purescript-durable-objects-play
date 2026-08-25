@@ -23,7 +23,7 @@ type ReminderApi =
   , forget :: Unit -> Rpc NoError Unit
   )
 
-reminder :: Object "Reminder" ReminderApi
+reminder :: Object "Reminder" ReminderApi ()
 reminder = Durable.object
   { remind: method
   , pending: method
@@ -37,7 +37,7 @@ noteKey = Storage.key "note"
 fired :: Storage.Prefix String
 fired = Storage.prefix "fired:"
 
-reminderLive :: Live "Reminder" ReminderApi
+reminderLive :: Live "Reminder" ReminderApi ()
 reminderLive =
   Durable.implementWith reminder ado
     state <- Durable.state
@@ -51,6 +51,8 @@ reminderLive =
             , fired: \_ -> fromFoldable <<< Map.values <$> Storage.list state fired
             , forget: \_ -> Storage.deleteAll state
             }
+        , connect: mempty
+        , disconnect: mempty
         , alarm: do
             note <- Storage.get state noteKey
             for_ note \text -> do

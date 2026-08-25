@@ -99,7 +99,11 @@
         border-bottom: 1px solid var(--line);
       }
       .room-title { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
-      .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: #2ecc71; box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.2); }
+      .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--muted); opacity: 0.5; transition: background 200ms ease, box-shadow 200ms ease; }
+      .dot.online { background: #2ecc71; opacity: 1; box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.2); }
+      .members { display: flex; align-items: center; margin-right: 0.5rem; }
+      .members .avatar { width: 1.5rem; height: 1.5rem; font-size: 0.6rem; margin-left: -0.4rem; box-shadow: 0 0 0 2px var(--surface-solid); }
+      .members .avatar:first-child { margin-left: 0; }
       .room-id { font-size: 0.75rem; color: var(--muted); }
       .room-actions { display: flex; align-items: center; gap: 0.25rem; }
       .identity { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem 0.25rem 0.25rem; font-weight: 500; }
