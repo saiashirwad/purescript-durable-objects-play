@@ -378,7 +378,6 @@ styles =
   , quote: create
       [ "align-items" := "flex-start"
       , "background-color" := var tokens.tint
-      , "border-inline-start" := "2px solid " <> var tokens.accent
       , "border-radius" := "0.5rem"
       , "display" := "flex"
       , "flex-direction" := "column"
@@ -395,7 +394,6 @@ styles =
       ]
   , mineQuote: create
       [ "background-color" := "oklch(100% 0 0 / 16%)"
-      , "border-inline-start-color" := "currentColor"
       , "color" := "inherit"
       ]
   , quoteAuthor: create
@@ -500,7 +498,6 @@ styles =
   , replyChip: create
       [ "align-items" := "center"
       , "background-color" := var tokens.tint
-      , "border-inline-start" := "3px solid " <> var tokens.accent
       , "border-radius" := var tokens.radiusSm
       , "color" := var tokens.textMuted
       , "display" := "flex"

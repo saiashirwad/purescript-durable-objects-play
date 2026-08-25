@@ -8,6 +8,7 @@ import Prelude
 
 import Ai (Agent, Def, Model, invoke, mount, text, tool)
 import Ai.Catalogue as Catalogue
+import Ai.Exa as Exa
 import Ai.Model as Model
 import Ai.Provider as Provider
 import Ai.Schema as Schema
@@ -32,7 +33,7 @@ import Data.Codec.Argonaut.Record as CAR
 import Data.DateTime.Instant (unInstant)
 import Data.Divide (divided)
 import Data.Either (Either(..), either)
-import Data.Foldable (for_)
+import Data.Foldable (foldMap, for_)
 import Data.Functor.Contravariant (cmap)
 import Data.Int (fromString)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
@@ -58,6 +59,7 @@ type Room =
   , messages :: Ref (Array Message)
   , emit :: Channels
   , assistant :: Maybe (Model Aff)
+  , search :: Maybe Exa.Search
   }
 
 -- | The socket, narrowed to each event: `cmap` on a `Contravariant`.
@@ -95,12 +97,13 @@ open modelFor = ado
   state <- Durable.state
   sockets <- Durable.sockets room
   apiKey <- Durable.optional "DEEPSEEK_API_KEY"
+  exaKey <- Durable.optional "EXA_API_KEY"
   in
     do
       Sql.execute state createImages unit
       history <- runMaybeT $ MaybeT (Storage.get state messagesKey) <|> map upgrade <$> MaybeT (Storage.get state legacyKey)
       messages <- liftEffect $ Ref.new $ fromMaybe [] history
-      pure { state, messages, emit: channels sockets, assistant: modelFor <$> apiKey }
+      pure { state, messages, emit: channels sockets, assistant: modelFor <$> apiKey, search: Exa.search <$> exaKey }
 
 handlersFor :: Room -> Handlers RoomApi
 handlersFor r =
@@ -267,14 +270,20 @@ mentionsAssistant = contains (Pattern ("@" <> assistantName)) <<< toLower
 persona :: Def String String
 persona = text $
   "You are '" <> assistantName <> "', a member of a small chat room. Reply in one or two short sentences, "
-    <> "as yourself, to whoever mentioned you last. Markdown is fine. Do not prefix your name."
+    <> "as yourself, to whoever mentioned you last. Markdown is fine. Do not prefix your name. "
+    <> "Use the search tool for anything recent or anything you are not sure of, and link the page you relied on."
 
--- | The assistant as an agent over the room: the room's own capabilities are
--- | its tools, and the model (in `Aff`) is hoisted into `Runtime`.
+-- | The assistant as an agent over the room: the room's own capabilities and
+-- | the web are its tools, and the model (in `Aff`) is hoisted into `Runtime`.
 agentFor :: Room -> Maybe (Agent Runtime String String)
-agentFor r = r.assistant <#> \model -> mount (Model.hoist liftAff model) [ whoIsHere ] persona
+agentFor r = r.assistant <#> \model -> mount (Model.hoist liftAff model) ([ whoIsHere ] <> foldMap (pure <<< web) r.search) persona
   where
   whoIsHere = tool "members" "Who is in the room right now" (Schema.object {}) (Schema.array Schema.string) \_ -> members r
+  web search = tool "search" "Search the web; returns pages with a short excerpt of each"
+    (Schema.object { query: Schema.describe "What to look for, as you would type it into a search engine" Schema.string })
+    (Schema.object { results: Schema.array result, error: Schema.nullable Schema.string })
+    \{ query } -> liftAff (search query) <#> either (\why -> { results: [], error: Just why }) (\results -> { results, error: Nothing })
+  result = Schema.object { title: Schema.string, url: Schema.string, excerpt: Schema.string }
 
 -- | Runs from the alarm, so the reply survives the request that asked for
 -- | it. Recent messages are the prompt; the reply threads under the last
