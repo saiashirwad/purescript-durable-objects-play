@@ -4,6 +4,7 @@ import Prelude
 
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Rpc as Rpc
+import Cloudflare.Durable.Simulator as Simulator
 import Data.Either (Either(..))
 import Effect (Effect)
 import Effect.Aff (launchAff_)
@@ -12,7 +13,7 @@ import Example.Counter (counterLive)
 
 main :: Effect Unit
 main = launchAff_ do
-  counters <- Durable.simulate counterLive
+  counters <- Simulator.simulate counterLive
   let user = Durable.getByName counters "user-123"
   result <- Rpc.run do
     first <- user.increment unit

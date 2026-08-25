@@ -8,6 +8,37 @@ export const storagePut = (ctx) => (key) => (value) => () =>
 
 export const storageDelete = (ctx) => (key) => () => ctx.storage.delete(key);
 
+export const storageList = (ctx) => (options) => () => {
+  const query = { prefix: options.prefix, reverse: options.reverse };
+  if (options.limit !== null) query.limit = options.limit;
+  return ctx.storage
+    .list(query)
+    .then((entries) => Array.from(entries, ([key, value]) => ({ key, value })));
+};
+
+export const storageDeleteAll = (ctx) => () => ctx.storage.deleteAll();
+
+export const now = () => Date.now();
+
+export const alarmSet = (ctx) => (at) => () => ctx.storage.setAlarm(at);
+
+export const alarmGet = (ctx) => () =>
+  ctx.storage.getAlarm().then((at) => (at === undefined ? null : at));
+
+export const alarmDelete = (ctx) => () => ctx.storage.deleteAlarm();
+
+// SQLite binds null, numbers, strings and blobs. Booleans become 0/1 and
+// anything structured becomes its JSON text.
+const bindable = (value) =>
+  typeof value === "boolean"
+    ? value ? 1 : 0
+    : value !== null && typeof value === "object"
+      ? JSON.stringify(value)
+      : value;
+
+export const sqlExec = (ctx) => (query) => (bindings) => () =>
+  ctx.storage.sql.exec(query, ...bindings.map(bindable)).toArray();
+
 export const variables = (env) => (names) => () => {
   const found = {};
   for (const name of names) {

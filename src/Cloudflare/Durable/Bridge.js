@@ -10,11 +10,14 @@ export const bridgeImpl = (base, methods, activate) => {
         this.handlers = await activate(ctx)(env)();
       });
     }
+    alarm() {
+      return this.handlers.alarm();
+    }
   }
   for (const name of methods) {
     Object.defineProperty(Bridged.prototype, name, {
       value: function (request) {
-        return this.handlers[name](request)();
+        return this.handlers.methods[name](request)();
       },
       writable: true,
       configurable: true,

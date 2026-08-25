@@ -1,5 +1,6 @@
 module Cloudflare.Durable.Runtime
-  ( PlatformError(..)
+  ( Listing
+  , PlatformError(..)
   , Runtime
   , State(..)
   , class MonadRuntime
@@ -11,13 +12,16 @@ module Cloudflare.Durable.Runtime
 
 import Prelude
 
+import Control.Apply (lift2)
 import Control.Monad.Error.Class (class MonadError, class MonadThrow, throwError)
 import Control.Monad.Except (ExceptT(..), runExceptT)
 import Control.Monad.Rec.Class (class MonadRec)
 import Data.Argonaut.Core (Json)
 import Data.Bifunctor (lmap)
+import Data.DateTime.Instant (Instant)
 import Data.Either (Either)
 import Data.Maybe (Maybe)
+import Data.Tuple (Tuple)
 import Effect.Aff (Aff, attempt, message)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
@@ -33,10 +37,21 @@ derive instance eqPlatformError :: Eq PlatformError
 platformError :: forall m a. MonadThrow PlatformError m => String -> String -> m a
 platformError operation message = throwError $ PlatformError { operation, message }
 
+type Listing = { prefix :: String, limit :: Maybe Int, reverse :: Boolean }
+
+-- | Everything one object can ask of the platform. The simulator answers in
+-- | memory; the Worker bridge answers with `DurableObjectState`.
 newtype State = State
   { get :: String -> Aff (Maybe Json)
   , put :: String -> Json -> Aff Unit
   , delete :: String -> Aff Boolean
+  , list :: Listing -> Aff (Array (Tuple String Json))
+  , deleteAll :: Aff Unit
+  , now :: Aff Instant
+  , setAlarm :: Instant -> Aff Unit
+  , getAlarm :: Aff (Maybe Instant)
+  , deleteAlarm :: Aff Unit
+  , sql :: String -> Array Json -> Aff (Array Json)
   }
 
 newtype Runtime a = Runtime (ExceptT PlatformError Aff a)
@@ -51,6 +66,14 @@ derive newtype instance monadEffectRuntime :: MonadEffect Runtime
 derive newtype instance monadAffRuntime :: MonadAff Runtime
 derive newtype instance monadThrowRuntime :: MonadThrow PlatformError Runtime
 derive newtype instance monadErrorRuntime :: MonadError PlatformError Runtime
+
+-- | Sequence two actions and combine their results. `Runtime Unit` is then a
+-- | monoid whose `mempty` does nothing: the shape of an alarm handler.
+instance semigroupRuntime :: Semigroup a => Semigroup (Runtime a) where
+  append = lift2 append
+
+instance monoidRuntime :: Monoid a => Monoid (Runtime a) where
+  mempty = pure mempty
 
 run :: forall a. Runtime a -> Aff (Either PlatformError a)
 run (Runtime action) = runExceptT action

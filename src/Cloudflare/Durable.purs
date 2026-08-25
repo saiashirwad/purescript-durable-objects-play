@@ -4,7 +4,6 @@ module Cloudflare.Durable
   , module Core
   , module Init
   , module Runtime
-  , module Simulator
   ) where
 
 import Prelude
@@ -14,7 +13,6 @@ import Cloudflare.Durable.Core (Live(..), Object, className)
 import Cloudflare.Durable.Init (Init, Plan, state, variable) as Init
 import Cloudflare.Durable.Platform (namespaceFromBinding)
 import Cloudflare.Durable.Runtime (class MonadRuntime, PlatformError(..), Runtime, State, liftRuntime) as Runtime
-import Cloudflare.Durable.Simulator (simulate) as Simulator
 import Cloudflare.Worker (WorkerInit, WorkerRef, objectBinding, scriptName)
 import Data.Maybe (Maybe(..))
 

@@ -20,7 +20,10 @@ import Foreign (Foreign)
 import Foreign.Object (Object)
 import Foreign.Object as Object
 
-type Activate = Foreign -> Foreign -> Effect (Promise (Object (Json -> Effect (Promise Json))))
+type Activate =
+  Foreign
+  -> Foreign
+  -> Effect (Promise { methods :: Object (Json -> Effect (Promise Json)), alarm :: Effect (Promise Unit) })
 
 foreign import bridgeImpl :: Fn3 Foreign (Array String) Activate Foreign
 
@@ -30,6 +33,9 @@ bridge = mkFn2 \base live -> runFn3 bridgeImpl base (manifest live).methods (act
 activateWith :: forall name api. Live name api -> Activate
 activateWith live ctx env = fromAff do
   variables <- liftEffect $ variablesFrom env (manifest live).variables
-  handlers <- activate live { state: stateFromContext ctx, variables }
+  activated <- activate live { state: stateFromContext ctx, variables }
   let promised handle = fromAff <<< handle
-  pure $ Object.fromFoldable $ (Map.toUnfoldable (map promised handlers) :: Array _)
+  pure
+    { methods: Object.fromFoldable (Map.toUnfoldable (map promised activated.methods) :: Array _)
+    , alarm: fromAff activated.alarm
+    }

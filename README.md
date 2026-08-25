@@ -48,6 +48,45 @@ say roomId text = do
   Rpc.run $ stub.post { author: "carol", text }
 ```
 
+Storage, alarms and SQL all go through one `State`, so the simulator and the
+Worker answer the same calls:
+
+```purescript
+-- Typed key-value: a Prefix is a family of Keys sharing a codec.
+fired :: Storage.Prefix String
+fired = Storage.prefix "fired:"
+
+-- SQL: a Statement is a Profunctor. Params encode contravariantly (Divisible),
+-- rows decode applicatively.
+insert :: Statement { account :: String, amount :: Int } Unit
+insert = lcmap (\e -> e.account /\ e.amount) $ Sql.statement
+  "INSERT INTO entries (account, amount) VALUES (?, ?)"
+  (Sql.param CA.string `divided` Sql.param CA.int)
+  (pure unit)
+
+byAccount :: Statement String { id :: Int, amount :: Int }
+byAccount = Sql.statement
+  "SELECT id, amount FROM entries WHERE account = ? ORDER BY id"
+  Sql.paramOf
+  ({ id: _, amount: _ } <$> Sql.columnOf "id" <*> Sql.columnOf "amount")
+
+-- Alarms: `alarm :: Runtime Unit` is a Monoid; `mempty` means no alarm.
+reminderLive = Durable.implementWith reminder ado
+  state <- Durable.state
+  in pure
+    { methods: { remind: \{ after, note } -> do
+        Storage.put state noteKey note
+        Alarm.scheduleIn state (Milliseconds after) }
+    , alarm: Storage.get state noteKey >>= traverse_ \note ->
+        Storage.put state (fired `Storage.at` "0") note
+    }
+
+-- In tests, time is a Clock you advance; due alarms fire during `advance`.
+clock <- Simulator.clock
+reminders <- Simulator.simulateOn clock reminderLive
+Simulator.advance clock (Milliseconds 1000.0)
+```
+
 ```sh
 npm install
 npm run dev      # chat at localhost:8787, counter at /counter.html

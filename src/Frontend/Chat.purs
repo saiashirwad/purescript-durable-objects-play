@@ -4,13 +4,18 @@ module Frontend.Chat
 
 import Prelude
 
-import Chat.Client (Chat, Room, Subscription)
+import Chat.Client (Chat, RoomId)
 import Chat.Client as Chat
-import Chat.Room (Message)
-import Data.Array (reverse)
+import Chat.Room (Message, RoomApi)
+import Data.Array (snoc, zip)
+import Data.Array as Array
+import Data.Enum (fromEnum)
+import Data.String as String
 import Data.Either (Either(..))
+import Data.Foldable (traverse_)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String (drop, null, trim)
+import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Effect.Class (liftEffect)
@@ -19,15 +24,19 @@ import Halogen.Aff as HA
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
-import Halogen.Subscription as HS
 import Halogen.VDom.Driver (runUI)
 import Web.Event.Event (Event, preventDefault)
 import Web.HTML (window)
+import Web.HTML.HTMLElement (HTMLElement, focus)
 import Web.HTML.Location as Location
 import Web.HTML.Window as Window
 import Web.Storage.Storage as Storage
+import Cloudflare.Durable.Rpc as Rpc
 
 foreign import formatTime :: Number -> String
+foreign import nearBottom :: HTMLElement -> Effect Boolean
+foreign import scrollToEnd :: HTMLElement -> Effect Unit
+foreign import copyText :: String -> Effect Unit
 
 chat :: Chat
 chat = Chat.connect "/rpc"
@@ -39,30 +48,33 @@ type State =
 
 data View
   = Lobby { busy :: Boolean }
-  | Joining { room :: Room, name :: String }
+  | Joining { id :: RoomId, name :: String }
   | InRoom RoomView
 
 type RoomView =
-  { room :: Room
+  { id :: RoomId
+  , room :: Record RoomApi
   , link :: String
   , draft :: String
   , messages :: Array Message
-  , subscription :: Subscription
+  , feed :: H.SubscriptionId
   , error :: Maybe String
   , sending :: Boolean
+  , copied :: Boolean
   }
 
 data Action
   = Initialize
   | CreateRoom
-  | Enter Room
+  | Enter RoomId
   | SetName String
   | SubmitName Event
-  | Join Room
+  | Join RoomId
   | ChangeName
   | SetDraft String
   | Submit Event
-  | Received (Array Message)
+  | Received Message
+  | CopyLink
   | Leave
 
 main :: Effect Unit
@@ -77,75 +89,139 @@ page = H.mkComponent
   , eval: H.mkEval H.defaultEval
       { handleAction = handleAction
       , initialize = Just Initialize
-      , finalize = Just Leave
       }
   }
+
+messagesRef :: H.RefLabel
+messagesRef = H.RefLabel "messages"
 
 render :: forall m. State -> H.ComponentHTML Action () m
 render st = case st.view of
   Lobby lobby ->
-    HH.main [ HP.class_ (HH.ClassName "centered") ]
-      [ HH.h1_ [ HH.text "Chat" ]
-      , HH.p [ HP.class_ (HH.ClassName "hint") ]
-          [ HH.text "Each room is one Durable Object. Its id is the link; anyone who has it can talk." ]
-      , HH.button
-          [ HP.disabled lobby.busy, HE.onClick \_ -> CreateRoom ]
-          [ HH.text if lobby.busy then "Creating…" else "Create a room" ]
+    HH.main [ cls "centered" ]
+      [ HH.div [ cls "card" ]
+          [ HH.h1_ [ HH.text "Chat" ]
+          , HH.p [ cls "hint" ]
+              [ HH.text "Each room is one Durable Object. Its id is the link; anyone who has it can talk." ]
+          , HH.button
+              [ cls "primary", HP.disabled lobby.busy, HE.onClick \_ -> CreateRoom ]
+              [ HH.text if lobby.busy then "Creating…" else "Create a room" ]
+          ]
       ]
 
   Joining joining ->
-    HH.main [ HP.class_ (HH.ClassName "centered") ]
-      [ HH.h1_ [ HH.text "Who are you?" ]
-      , HH.p [ HP.class_ (HH.ClassName "hint") ] [ HH.text "Pick the name others will see in this room." ]
-      , HH.form [ HE.onSubmit SubmitName ]
-          [ HH.input
+    HH.main [ cls "centered" ]
+      [ HH.form [ cls "card", HE.onSubmit SubmitName ]
+          [ HH.h1_ [ HH.text "Who are you?" ]
+          , HH.p [ cls "hint" ] [ HH.text "The name others will see in this room." ]
+          , HH.input
               [ HP.placeholder "Your name"
               , HP.autofocus true
               , HP.value joining.name
               , HE.onValueInput SetName
               ]
           , HH.button
-              [ HP.type_ HP.ButtonSubmit, HP.disabled (null (trim joining.name)) ]
+              [ cls "primary", HP.type_ HP.ButtonSubmit, HP.disabled (null (trim joining.name)) ]
               [ HH.text "Join" ]
           ]
       ]
 
   InRoom r ->
-    HH.main [ HP.class_ (HH.ClassName "room") ]
+    HH.main [ cls "room" ]
       [ HH.header_
-          [ HH.div_
-              [ HH.h1_ [ HH.text "Chat" ]
-              , HH.p [ HP.class_ (HH.ClassName "hint") ]
-                  [ HH.text $ "as " <> st.author <> " "
-                  , HH.button [ HP.class_ (HH.ClassName "quiet"), HE.onClick \_ -> ChangeName ] [ HH.text "change" ]
-                  ]
+          [ HH.div [ cls "room-title" ]
+              [ HH.span [ cls "dot" ] []
+              , HH.h1_ [ HH.text "Room" ]
+              , HH.code [ cls "room-id", HP.title (Chat.printRoomId r.id) ] [ HH.text $ shortId r.id ]
+              , HH.button [ cls "chip", HE.onClick \_ -> CopyLink ]
+                  [ linkIcon, HH.text if r.copied then "Copied" else "Copy link" ]
               ]
-          , HH.label_
-              [ HH.text "Invite link"
-              , HH.input [ HP.readOnly true, HP.value r.link ]
+          , HH.div [ cls "room-actions" ]
+              [ HH.button [ cls "identity", HP.title "Change name", HE.onClick \_ -> ChangeName ]
+                  [ avatar st.author, HH.span_ [ HH.text st.author ] ]
+              , HH.button [ cls "quiet", HE.onClick \_ -> Leave ] [ HH.text "Leave" ]
               ]
-          , HH.button [ HP.class_ (HH.ClassName "quiet"), HE.onClick \_ -> Leave ] [ HH.text "leave" ]
           ]
-      , HH.ol [ HP.class_ (HH.ClassName "messages") ] $ reverse r.messages <#> \m ->
-          HH.li [ HP.class_ (HH.ClassName if m.author == st.author then "mine" else "theirs") ]
-            [ HH.span [ HP.class_ (HH.ClassName "author") ] [ HH.text m.author ]
-            , HH.span [ HP.class_ (HH.ClassName "time") ] [ HH.text $ formatTime m.sentAt ]
-            , HH.p_ [ HH.text m.text ]
+      , HH.ol [ cls "messages", HP.ref messagesRef ] $
+          if r.messages == [] then
+            [ HH.li [ cls "empty" ]
+                [ HH.p [ cls "empty-title" ] [ HH.text "It's quiet in here" ]
+                , HH.p [ cls "hint" ] [ HH.text "Share the link and say hello." ]
+                ]
             ]
-      , HH.form [ HE.onSubmit Submit ]
-          [ HH.input
-              [ HP.placeholder "Say something"
-              , HP.autofocus true
-              , HP.value r.draft
-              , HP.disabled r.sending
-              , HE.onValueInput SetDraft
+          else threaded r.messages <#> \(Tuple continued m) ->
+            let
+              mine = m.author == st.author
+            in
+              HH.li
+                [ HP.classes $ map HH.ClassName $
+                    [ if mine then "mine" else "theirs" ] <> (if continued then [ "continued" ] else [])
+                ]
+                [ if mine || continued then HH.span [ cls "gutter" ] [] else avatar m.author
+                , HH.div [ cls "bubble" ]
+                    [ if mine || continued then HH.text "" else HH.span [ cls "author" ] [ HH.text m.author ]
+                    , HH.p_ [ HH.text m.text ]
+                    , HH.span [ cls "time" ] [ HH.text $ formatTime m.sentAt ]
+                    ]
+                ]
+      , HH.footer_
+          [ HH.form [ cls "composer", HE.onSubmit Submit ]
+              [ HH.input
+                  [ HP.placeholder "Message"
+                  , HP.autofocus true
+                  , HP.autocomplete HP.AutocompleteOff
+                  , HP.value r.draft
+                  , HP.ref composerRef
+                  , HE.onValueInput SetDraft
+                  ]
+              , HH.button
+                  [ cls "send", HP.type_ HP.ButtonSubmit, HP.title "Send", HP.disabled (r.sending || null (trim r.draft)) ]
+                  [ sendIcon ]
               ]
-          , HH.button [ HP.type_ HP.ButtonSubmit, HP.disabled r.sending ] [ HH.text "send" ]
+          , case r.error of
+              Just message -> HH.p [ cls "error" ] [ HH.text message ]
+              Nothing -> HH.text ""
           ]
-      , case r.error of
-          Just message -> HH.p [ HP.class_ (HH.ClassName "error") ] [ HH.text message ]
-          Nothing -> HH.text ""
       ]
+
+avatar :: forall w i. String -> HH.HTML w i
+avatar name = HH.span [ cls "avatar", HP.style ("--hue: " <> show (hue name)) ]
+  [ HH.text $ String.toUpper $ String.take 1 name ]
+  where
+  hue = String.toCodePointArray >>> map fromEnum >>> Array.foldl (\h c -> (h * 31 + c) `mod` 360) 7
+
+shortId :: RoomId -> String
+shortId id = let s = Chat.printRoomId id in String.take 6 s <> "…" <> String.drop (String.length s - 4) s
+
+linkIcon :: forall w i. HH.HTML w i
+linkIcon = HH.elementNS svgNs (HH.ElemName "svg")
+  [ HP.attr (HH.AttrName "viewBox") "0 0 24 24", HP.attr (HH.AttrName "aria-hidden") "true" ]
+  [ path "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"
+  , path "M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"
+  ]
+
+sendIcon :: forall w i. HH.HTML w i
+sendIcon = HH.elementNS svgNs (HH.ElemName "svg")
+  [ HP.attr (HH.AttrName "viewBox") "0 0 24 24", HP.attr (HH.AttrName "aria-hidden") "true" ]
+  [ path "M12 19V5", path "m5 12 7-7 7 7" ]
+
+path :: forall w i. String -> HH.HTML w i
+path d = HH.elementNS svgNs (HH.ElemName "path") [ HP.attr (HH.AttrName "d") d ] []
+
+svgNs :: HH.Namespace
+svgNs = HH.Namespace "http://www.w3.org/2000/svg"
+
+composerRef :: H.RefLabel
+composerRef = H.RefLabel "composer"
+
+cls :: forall r i. String -> HH.IProp (class :: String | r) i
+cls = HP.class_ <<< HH.ClassName
+
+-- | Pair each message with whether it continues the previous author's run.
+threaded :: Array Message -> Array (Tuple Boolean Message)
+threaded messages = zip ([ false ] <> (continues <$> zip messages (Array.drop 1 messages))) messages
+  where
+  continues (Tuple previous next) = previous.author == next.author && next.sentAt - previous.sentAt < 300000.0
 
 handleAction :: forall output m. MonadAff m => Action -> H.HalogenM State Action () output m Unit
 handleAction = case _ of
@@ -154,19 +230,19 @@ handleAction = case _ of
     H.modify_ _ { author = author }
     fragment <- liftEffect $ drop 1 <$> (Location.hash =<< location)
     case Chat.parseRoomId chat fragment of
-      Just id -> handleAction $ Enter $ Chat.openRoom chat id
+      Just id -> handleAction $ Enter id
       Nothing -> pure unit
 
   CreateRoom -> do
     H.modify_ _ { view = Lobby { busy: true } }
-    created <- liftAff $ Chat.createRoom chat
-    handleAction $ Enter $ Chat.openRoom chat created
+    id <- liftAff $ Chat.create chat
+    handleAction $ Enter id
 
-  Enter room -> do
-    liftEffect $ Location.setHash (Chat.printRoomId $ Chat.roomId room) =<< location
+  Enter id -> do
+    liftEffect $ Location.setHash (Chat.printRoomId id) =<< location
     { author } <- H.get
-    if null (trim author) then H.modify_ _ { view = Joining { room, name: "" } }
-    else handleAction $ Join room
+    if null (trim author) then H.modify_ _ { view = Joining { id, name: "" } }
+    else handleAction $ Join id
 
   SetName name -> H.modify_ \st -> case st.view of
     Joining j -> st { view = Joining j { name = name } }
@@ -176,31 +252,39 @@ handleAction = case _ of
     liftEffect $ preventDefault event
     st <- H.get
     case st.view of
-      Joining { room, name } | not null (trim name) -> do
+      Joining { id, name } | not null (trim name) -> do
         liftEffect $ Storage.setItem authorKey (trim name) =<< localStorage
         H.modify_ _ { author = trim name }
-        handleAction $ Join room
+        handleAction $ Join id
       _ -> pure unit
 
-  Join room -> do
+  Join id -> do
     link <- liftEffect $ Location.href =<< location
-    { emitter, listener } <- liftEffect HS.create
-    _ <- H.subscribe emitter
-    subscription <- liftAff $ Chat.listen room 0 (HS.notify listener <<< Received)
+    let room = Chat.open chat id
+    feed <- H.subscribe $ Received <$> Chat.feed room 0
     H.modify_ _
-      { view = InRoom { room, link, draft: "", messages: [], subscription, error: Nothing, sending: false } }
+      { view = InRoom
+          { id, room, link, draft: "", messages: [], feed, error: Nothing, sending: false, copied: false }
+      }
+    focusComposer
 
-  ChangeName -> do
+  ChangeName -> leaveRoom \r st -> st { view = Joining { id: r.id, name: st.author } }
+
+  Received message -> do
+    pinned <- withMessages nearBottom
+    inRoom \r -> r { messages = snoc r.messages message }
+    { author } <- H.get
+    when (fromMaybe true pinned || message.author == author) $ void $ withMessages scrollToEnd
+
+  SetDraft draft -> inRoom _ { draft = draft }
+
+  CopyLink -> do
     st <- H.get
     case st.view of
       InRoom r -> do
-        liftAff $ Chat.stop r.subscription
-        H.modify_ _ { view = Joining { room: r.room, name: st.author } }
+        liftEffect $ copyText r.link
+        inRoom _ { copied = true }
       _ -> pure unit
-
-  Received messages -> inRoom \r -> r { messages = r.messages <> messages }
-
-  SetDraft draft -> inRoom _ { draft = draft }
 
   Submit event -> do
     liftEffect $ preventDefault event
@@ -208,24 +292,40 @@ handleAction = case _ of
     case st.view of
       InRoom r | not null (trim r.draft) -> do
         inRoom _ { sending = true, error = Nothing }
-        outcome <- liftAff $ Chat.send r.room { author: st.author, text: r.draft }
+        outcome <- liftAff $ Rpc.run $ r.room.post { author: st.author, text: r.draft }
         inRoom case outcome of
           Right _ -> _ { sending = false, draft = "" }
           Left failure -> _ { sending = false, error = Just $ Chat.describeFailure failure }
+        focusComposer
       _ -> pure unit
 
   Leave -> do
-    st <- H.get
-    case st.view of
-      InRoom r -> liftAff $ Chat.stop r.subscription
-      _ -> pure unit
     liftEffect $ Location.setHash "" =<< location
-    H.modify_ _ { view = Lobby { busy: false } }
+    leaveRoom \_ st -> st { view = Lobby { busy: false } }
   where
   inRoom f = H.modify_ \st -> case st.view of
     InRoom r -> st { view = InRoom (f r) }
     _ -> st
 
+  leaveRoom next = do
+    st <- H.get
+    case st.view of
+      InRoom r -> do
+        H.unsubscribe r.feed
+        H.put $ next r st
+      _ -> pure unit
+
+  focusComposer = H.getHTMLElementRef composerRef >>= traverse_ (liftEffect <<< focus)
+
   location = Window.location =<< window
   localStorage = Window.localStorage =<< window
   authorKey = "chat.author"
+
+withMessages
+  :: forall a output m
+   . MonadAff m
+  => (HTMLElement -> Effect a)
+  -> H.HalogenM State Action () output m (Maybe a)
+withMessages act = H.getHTMLElementRef messagesRef >>= case _ of
+  Just element -> Just <$> liftEffect (act element)
+  Nothing -> pure Nothing

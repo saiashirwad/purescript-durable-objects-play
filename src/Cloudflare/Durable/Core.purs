@@ -1,5 +1,6 @@
 module Cloudflare.Durable.Core
-  ( Handlers
+  ( Activated
+  , Handlers
   , Id(..)
   , Live(..)
   , Manifest
@@ -30,7 +31,7 @@ import Cloudflare.Durable.Init as Init
 import Cloudflare.Durable.Protocol (class Connect, class MethodNames, class Serve, RawCall, RawHandler, connect, methodNames, serve)
 import Cloudflare.Durable.Runtime (Runtime)
 import Cloudflare.Durable.Runtime as Runtime
-import Data.Either (Either(..))
+import Data.Either (Either(..), either)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
@@ -79,7 +80,9 @@ loopback (Object o) impl = o.connect \name request ->
     Just handle -> handle request
     Nothing -> throwError $ error $ o.name <> " has no method " <> show name
 
-type Handlers api = { methods :: Record api, alarm :: Maybe (Runtime Unit) }
+-- | What activation yields. `alarm` runs when a scheduled alarm is due;
+-- | `mempty` is "no alarm".
+type Handlers api = { methods :: Record api, alarm :: Runtime Unit }
 
 newtype Live :: Symbol -> Row Type -> Type
 newtype Live name api = Live
@@ -88,7 +91,7 @@ newtype Live name api = Live
   }
 
 implement :: forall name api. Object name api -> Init (Runtime (Record api)) -> Live name api
-implement o = implementWith o <<< map (map { methods: _, alarm: Nothing })
+implement o = implementWith o <<< map (map { methods: _, alarm: mempty })
 
 implementWith :: forall name api. Object name api -> Init (Runtime (Handlers api)) -> Live name api
 implementWith o activation = Live { object: o, activate: activation }
@@ -99,11 +102,18 @@ manifest :: forall name api. Live name api -> Manifest
 manifest (Live { object: Object o, activate: activation }) =
   { className: o.name, methods: o.methods, variables: (Init.plan activation).variables }
 
-activate :: forall name api. Live name api -> Env -> Aff (Map String RawHandler)
+type Activated = { methods :: Map String RawHandler, alarm :: Aff Unit }
+
+-- | The alarm rethrows a `PlatformError` as an exception so the platform
+-- | retries it.
+activate :: forall name api. Live name api -> Env -> Aff Activated
 activate (Live { object: Object o, activate: activation }) env = do
   outcome <- Runtime.run $ join $ Init.build activation env
   case outcome of
-    Right handlers -> pure $ o.serve handlers.methods
+    Right handlers -> pure
+      { methods: o.serve handlers.methods
+      , alarm: Runtime.run handlers.alarm >>= either (throwError <<< error <<< show) pure
+      }
     Left failure -> throwError $ error $ o.name <> " failed to activate: " <> show failure
 
 data Id

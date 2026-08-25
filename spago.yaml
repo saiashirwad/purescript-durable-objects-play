@@ -10,6 +10,7 @@ package:
     - codec-argonaut
     - console
     - const
+    - contravariant
     - control
     - datetime
     - effect
@@ -28,6 +29,7 @@ package:
     - ordered-collections
     - parallel
     - prelude
+    - profunctor
     - record
     - refs
     - strings

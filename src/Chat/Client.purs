@@ -1,57 +1,48 @@
+-- | The browser's view of a room. `open` gives the same `Record RoomApi` the
+-- | Worker holds, over HTTP; `feed` unfolds `since` into an `Emitter`.
 module Chat.Client
   ( Chat
-  , Room
   , RoomId
-  , Subscription
   , connect
-  , createRoom
+  , create
   , describeFailure
-  , history
-  , listen
-  , openRoom
+  , feed
+  , open
   , parseRoomId
   , printRoomId
-  , roomId
-  , send
-  , stop
   ) where
 
 import Prelude
 
-import Chat.Room (Message, NewMessage, PostError, RoomApi, room)
+import Chat.Room (Message, RoomApi, room)
 import Cloudflare.Durable (Namespace, ObjectId)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Http as Http
-import Cloudflare.Durable.Rpc (NoError, RpcFailure(..))
+import Cloudflare.Durable.Rpc (RpcFailure(..))
 import Cloudflare.Durable.Rpc as Rpc
+import Control.Monad.Rec.Class (Step(..), tailRecM)
 import Data.Array (last)
 import Data.Either (Either(..))
+import Data.Foldable (traverse_)
 import Data.Maybe (Maybe(..), maybe)
 import Data.String (null, trim)
 import Data.Time.Duration (Milliseconds(..))
-import Effect (Effect)
-import Effect.Aff (Aff, Fiber, delay, forkAff, killFiber, error)
+import Effect.Aff (Aff, delay, error, killFiber, launchAff, launchAff_)
 import Effect.Class (liftEffect)
+import Halogen.Subscription (Emitter, makeEmitter)
 
 newtype Chat = Chat (Namespace "Room" RoomApi)
 
 type RoomId = ObjectId "Room"
 
-newtype Room = Room { id :: RoomId, stub :: Record RoomApi }
-
-newtype Subscription = Subscription (Fiber Unit)
-
 connect :: String -> Chat
 connect prefix = Chat $ Http.connect prefix room
 
-createRoom :: Chat -> Aff RoomId
-createRoom (Chat rooms) = Durable.newUniqueId rooms
+create :: Chat -> Aff RoomId
+create (Chat rooms) = Durable.newUniqueId rooms
 
-openRoom :: Chat -> RoomId -> Room
-openRoom (Chat rooms) id = Room { id, stub: Durable.get rooms id }
-
-roomId :: Room -> RoomId
-roomId (Room r) = r.id
+open :: Chat -> RoomId -> Record RoomApi
+open (Chat rooms) = Durable.get rooms
 
 printRoomId :: RoomId -> String
 printRoomId = Durable.idToString
@@ -63,28 +54,21 @@ parseRoomId (Chat rooms) raw =
   in
     if null text then Nothing else Just $ Durable.idFromString rooms text
 
-history :: Room -> Aff (Either (RpcFailure NoError) (Array Message))
-history (Room r) = Rpc.run $ r.stub.history unit
-
-send :: Room -> NewMessage -> Aff (Either (RpcFailure PostError) Message)
-send (Room r) = Rpc.run <<< r.stub.post
-
--- | From message id `after` (0 for all). A failed poll retries after 2 seconds.
-listen :: Room -> Int -> (Array Message -> Effect Unit) -> Aff Subscription
-listen (Room r) after deliver = Subscription <$> forkAff (loop after)
+-- | Every message with id above `after`, then each new one as it arrives.
+-- | Polling starts on subscribe and stops on unsubscribe; a failed poll
+-- | retries after two seconds. The anamorphism over the cursor is `tailRecM`.
+feed :: Record RoomApi -> Int -> Emitter Message
+feed r after = makeEmitter \push -> do
+  fiber <- launchAff $ tailRecM (poll push) after
+  pure $ launchAff_ $ killFiber (error "unsubscribed") fiber
   where
-  loop cursor = do
-    outcome <- Rpc.run $ r.stub.since cursor
-    case outcome of
-      Right messages -> do
-        liftEffect $ deliver messages
-        loop $ maybe cursor _.id (last messages)
-      Left _ -> do
-        delay $ Milliseconds 2000.0
-        loop cursor
-
-stop :: Subscription -> Aff Unit
-stop (Subscription fiber) = killFiber (error "unsubscribed") fiber
+  poll push cursor = Rpc.run (r.since cursor) >>= case _ of
+    Right messages -> do
+      liftEffect $ traverse_ push messages
+      pure $ Loop $ maybe cursor _.id $ last messages
+    Left _ -> do
+      delay $ Milliseconds 2000.0
+      pure $ Loop cursor
 
 describeFailure :: forall e. Show e => RpcFailure e -> String
 describeFailure = case _ of
