@@ -33,7 +33,7 @@ import Ai.Schema as Schema
 import Data.Argonaut.Core as J
 import Example.Echo (echoLive)
 import Cloudflare.Worker as Worker
-import Cloudflare.Durable.Runtime (Launch(..))
+import Cloudflare.Durable.Container as Container
 import Data.Map as Map
 import Data.Profunctor (lcmap)
 import Test.Journal (journalLive)
@@ -164,7 +164,7 @@ main = launchAff_ do
   launched <- liftEffect $ Ref.new Map.empty
   echoes <- Simulator.simulateWith
     { serve: \port request -> pure $ Worker.text 200 $ "port " <> show port <> " got " <> Worker.pathname request
-    , launched: \(Launch l) -> liftEffect $ Ref.write l.env launched
+    , launched: liftEffect <<< flip Ref.write launched <<< Container.environment
     , variables: Map.empty
     }
     timeline
@@ -183,8 +183,10 @@ main = launchAff_ do
     Simulator.advance timeline (Milliseconds 2000.0)
     after <- Rpc.run $ stub.running unit
     pure $ before == Right false && Worker.status response == 200 && body == "port 8080 got /hello"
-      && during == Right true && Map.lookup "GREETING" env == Just "hello from purescript"
-      && early == Right true && after == Right false
+      && during == Right true
+      && Map.lookup "GREETING" env == Just "hello from purescript"
+      && early == Right true
+      && after == Right false
 
   check "sql rows decode through the applicative row" $ succeeds do
     let book = Durable.getByName journals "book"
@@ -314,7 +316,9 @@ main = launchAff_ do
     missing <- Durable.http rooms id $ Worker.requestTo "http://room/image/9"
     posted <- Rpc.run $ (Durable.get rooms id).post { author: "ann", text: "", images: [ 1 ], replyTo: Nothing }
     pure $ Worker.status uploaded == 200 && body == "{\"id\":1}" && Worker.status rejected == 415
-      && Worker.status served == 200 && Worker.status missing == 404 && (map _.images posted == Right [ 1 ])
+      && Worker.status served == 200
+      && Worker.status missing == 404
+      && (map _.images posted == Right [ 1 ])
 
   log "All tests passed."
 

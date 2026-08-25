@@ -6,30 +6,31 @@ module Chat.Room.Live
 
 import Prelude
 
-import Ai (Model, invoke, mount, text, tool)
-import Control.Alt ((<|>))
+import Ai (Agent, Def, Model, invoke, mount, text, tool)
 import Ai.DeepSeek as DeepSeek
 import Ai.Model as Model
 import Ai.Schema as Schema
 import Chat.Markdown as Markdown
-import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, maxTextLength, room)
-import Cloudflare.Durable (Live, Runtime, State)
+import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), Reaction, RoomApi, RoomEvents, maxTextLength, room)
+import Cloudflare.Durable (Handlers, Init, Live, Runtime, State)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Alarm as Alarm
 import Cloudflare.Durable.Rpc (Rpc, fail)
-import Cloudflare.Durable.Runtime (liftRuntime)
+import Cloudflare.Durable.Runtime (class MonadRuntime, liftRuntime)
 import Cloudflare.Durable.Sockets (Sockets)
 import Cloudflare.Durable.Sockets as Sockets
 import Cloudflare.Durable.Sql (Statement)
 import Cloudflare.Durable.Sql as Sql
 import Cloudflare.Durable.Storage as Storage
 import Cloudflare.Worker as Worker
-import Data.Array (any, elem, filter, find, last, nub, snoc, takeEnd)
+import Control.Alt ((<|>))
+import Control.Monad.Maybe.Trans (MaybeT(..), runMaybeT)
+import Data.Array (any, elem, filter, find, last, nub, null, snoc, takeEnd)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
 import Data.DateTime.Instant (unInstant)
 import Data.Divide (divided)
-import Data.Either (Either(..))
+import Data.Either (Either(..), either)
 import Data.Foldable (for_)
 import Data.Functor.Contravariant (cmap)
 import Data.Int (fromString)
@@ -39,15 +40,84 @@ import Data.Profunctor (lcmap)
 import Data.String (Pattern(..), contains, joinWith, length, stripPrefix, toLower, trim)
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple.Nested ((/\))
-import Data.Variant (inj)
+import Data.Variant (Variant, inj)
 import Effect.Aff (Aff)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (liftEffect)
 import Effect.Now (now)
+import Effect.Ref (Ref)
 import Effect.Ref as Ref
 import Type.Proxy (Proxy(..))
 
--- Storage ------------------------------------------------------------------
+-- The room -------------------------------------------------------------------
+
+-- | Everything a handler needs, built once per activation.
+type Room =
+  { state :: State
+  , messages :: Ref (Array Message)
+  , emit :: Channels
+  , assistant :: Maybe (Model Aff)
+  }
+
+-- | The socket, narrowed to each event: `cmap` on a `Contravariant`.
+type Channels =
+  { all :: Sockets (Variant RoomEvents)
+  , message :: Sockets Message
+  , updated :: Sockets Message
+  , joined :: Sockets String
+  , left :: Sockets String
+  , typing :: Sockets String
+  }
+
+channels :: Sockets (Variant RoomEvents) -> Channels
+channels all =
+  { all
+  , message: cmap (inj (Proxy :: Proxy "message")) all
+  , updated: cmap (inj (Proxy :: Proxy "updated")) all
+  , joined: cmap (inj (Proxy :: Proxy "joined")) all
+  , left: cmap (inj (Proxy :: Proxy "left")) all
+  , typing: cmap (inj (Proxy :: Proxy "typing")) all
+  }
+
+roomLive :: Live "Room" RoomApi RoomEvents
+roomLive = roomLiveWith (DeepSeek.model <<< DeepSeek.flash)
+
+-- | The room, given how to build a model from the API key. Tests pass a
+-- | scripted one.
+roomLiveWith :: (String -> Model Aff) -> Live "Room" RoomApi RoomEvents
+roomLiveWith modelFor = Durable.implementWith room $ map handlersFor <$> open modelFor
+
+-- | Plan what the room needs, then load it. The history comes from the
+-- | first source that has one: `<|>` on `MaybeT` stops at the first `Just`.
+open :: (String -> Model Aff) -> Init (Runtime Room)
+open modelFor = ado
+  state <- Durable.state
+  sockets <- Durable.sockets room
+  apiKey <- Durable.optional "DEEPSEEK_API_KEY"
+  in
+    do
+      Sql.execute state createImages unit
+      history <- runMaybeT $ MaybeT (Storage.get state messagesKey) <|> map upgrade <$> MaybeT (Storage.get state legacyKey)
+      messages <- liftEffect $ Ref.new $ fromMaybe [] history
+      pure { state, messages, emit: channels sockets, assistant: modelFor <$> apiKey }
+
+handlersFor :: Room -> Handlers RoomApi
+handlersFor r =
+  ( Durable.handlers
+      { post: post r
+      , react: react r
+      , history: \_ -> liftEffect $ Ref.read r.messages
+      , members: \_ -> members r
+      , typing: Sockets.broadcast r.emit.typing
+      }
+  )
+    { alarm = answer r
+    , fetch = images r.state
+    , connect = Sockets.broadcast r.emit.joined <<< _.tag
+    , disconnect = Sockets.broadcast r.emit.left <<< _.tag
+    }
+
+-- Storage ---------------------------------------------------------------------
 
 messagesKey :: Storage.Key (Array Message)
 messagesKey = Storage.key "messages.v2"
@@ -59,7 +129,8 @@ legacyKey :: Storage.Key (Array Legacy)
 legacyKey = Storage.key "messages"
 
 upgrade :: Legacy -> Message
-upgrade m = { id: m.id, author: m.author, text: m.text, images: [], replyTo: Nothing, mentions: Markdown.mentions m.text, reactions: [], sentAt: m.sentAt }
+upgrade m =
+  { id: m.id, author: m.author, text: m.text, images: [], replyTo: Nothing, mentions: Markdown.mentions m.text, reactions: [], sentAt: m.sentAt }
 
 pendingKey :: Storage.Key (Array Int)
 pendingKey = Storage.key "assistant.pending"
@@ -67,7 +138,78 @@ pendingKey = Storage.key "assistant.pending"
 keptMessages :: Int
 keptMessages = 500
 
--- Images, in the room's SQLite, served by the fetch hook ---------------------
+save :: Room -> Array Message -> Runtime Unit
+save r all = do
+  Storage.put r.state messagesKey all
+  liftEffect $ Ref.write all r.messages
+
+-- Messages ----------------------------------------------------------------------
+
+members :: forall m. MonadRuntime m => Room -> m (Array String)
+members r = nub <<< map _.tag <$> Sockets.connected r.emit.all
+
+-- | Number, stamp, store and broadcast a message.
+record :: Room -> NewMessage -> Runtime Message
+record r new = do
+  sentAt <- liftEffect $ unwrap <<< unInstant <$> now
+  all <- liftEffect $ Ref.read r.messages
+  let
+    message =
+      { id: maybe 1 (_.id >>> (_ + 1)) (last all)
+      , author: new.author
+      , text: new.text
+      , images: new.images
+      , replyTo: new.replyTo
+      , mentions: Markdown.mentions new.text
+      , reactions: []
+      , sentAt
+      }
+  save r $ takeEnd keptMessages $ snoc all message
+  Sockets.broadcast r.emit.message message
+  pure message
+
+-- | Validate, record, and queue a reply if the assistant was mentioned.
+post :: Room -> NewMessage -> Rpc PostError Message
+post r new = do
+  let author = trim new.author
+  let body = trim new.text
+  when (author == "") $ fail AuthorRequired
+  when (body == "" && null new.images) $ fail TextRequired
+  when (length body > maxTextLength) $ fail TextTooLong
+  all <- liftEffect $ Ref.read r.messages
+  for_ new.replyTo \id -> unless (any (_.id >>> eq id) all) $ fail $ NoSuchReply id
+  for_ new.images \id -> do
+    found <- Sql.first r.state imageExists id
+    unless (isJust found) $ fail $ NoSuchImage id
+  message <- liftRuntime $ record r new { author = author, text = body }
+  when (mentionsAssistant body && author /= assistantName) do
+    queued <- fromMaybe [] <$> Storage.get r.state pendingKey
+    Storage.put r.state pendingKey (snoc queued message.id)
+    Alarm.scheduleIn r.state (Milliseconds 0.0)
+  pure message
+
+react :: Room -> { id :: Int, emoji :: String, by :: String } -> Rpc ReactError Message
+react r { id, emoji, by } = do
+  when (trim emoji == "") $ fail EmojiRequired
+  all <- liftEffect $ Ref.read r.messages
+  case find (_.id >>> eq id) all of
+    Nothing -> fail $ NoSuchMessage id
+    Just found -> do
+      let message = found { reactions = toggle emoji by found.reactions }
+      liftRuntime do
+        save r $ all <#> \m -> if m.id == id then message else m
+        Sockets.broadcast r.emit.updated message
+      pure message
+
+-- | Flip `by` on `emoji`; a reaction nobody holds disappears.
+toggle :: String -> String -> Array Reaction -> Array Reaction
+toggle emoji by reactions = case find (_.emoji >>> eq emoji) reactions of
+  Nothing -> snoc reactions { emoji, by: [ by ] }
+  Just _ -> filter (not <<< null <<< _.by) $ reactions <#> \x ->
+    if x.emoji /= emoji then x
+    else x { by = if by `elem` x.by then filter (_ /= by) x.by else snoc x.by by }
+
+-- Images, in the room's SQLite, served by the fetch hook -------------------------
 
 createImages :: Statement Unit Unit
 createImages = Sql.statement
@@ -98,23 +240,21 @@ maxImageChars = 5600000
 -- | `GET /image/<n>` serves it.
 images :: State -> Worker.Request -> Runtime Worker.Response
 images state request = case Worker.method request, Worker.pathname request of
-  "POST", "/image" -> do
-    let mime = fromMaybe "" $ Worker.header request "content-type"
-    if stripPrefix (Pattern "image/") mime == Nothing then pure $ Worker.text 415 "send an image/* body"
-    else do
-      body <- liftAff $ Worker.bodyBase64 request
-      if length body > maxImageChars then pure $ Worker.text 413 "image too large"
-      else do
-        id <- fromMaybe 0 <$> Sql.first state insertImage { mime, data: body }
-        pure $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: CA.int }) { id }
-  "GET", path | Just id <- stripPrefix (Pattern "/image/") path >>= fromString -> do
-    found <- Sql.first state selectImage id
-    pure case found of
+  "POST", "/image"
+    | Just _ <- Worker.header request "content-type" >>= stripPrefix (Pattern "image/") -> do
+        body <- liftAff $ Worker.bodyBase64 request
+        if length body > maxImageChars then pure $ Worker.text 413 "image too large"
+        else do
+          id <- fromMaybe 0 <$> Sql.first state insertImage { mime: fromMaybe "" (Worker.header request "content-type"), data: body }
+          pure $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: CA.int }) { id }
+    | otherwise -> pure $ Worker.text 415 "send an image/* body"
+  "GET", path | Just id <- stripPrefix (Pattern "/image/") path >>= fromString ->
+    Sql.first state selectImage id <#> case _ of
       Just image -> Worker.bytes 200 image.mime image.data
       Nothing -> Worker.text 404 "no such image"
   _, _ -> pure $ Worker.text 404 "not found"
 
--- Assistant ----------------------------------------------------------------
+-- The assistant --------------------------------------------------------------------
 
 assistantName :: String
 assistantName = "ai"
@@ -122,139 +262,34 @@ assistantName = "ai"
 mentionsAssistant :: String -> Boolean
 mentionsAssistant = contains (Pattern ("@" <> assistantName)) <<< toLower
 
-roomLive :: Live "Room" RoomApi RoomEvents
-roomLive = roomLiveWith (DeepSeek.model <<< DeepSeek.flash)
+persona :: Def String String
+persona = text $
+  "You are '" <> assistantName <> "', a member of a small chat room. Reply in one or two short sentences, "
+    <> "as yourself, to whoever mentioned you last. Markdown is fine. Do not prefix your name."
 
--- | The room, given how to build a model from the API key. Tests pass a
--- | scripted one. A post that mentions `@ai` is queued and answered from the
--- | alarm, so the reply survives the request that asked for it.
-roomLiveWith :: (String -> Model Aff) -> Live "Room" RoomApi RoomEvents
-roomLiveWith modelFor =
-  Durable.implementWith room ado
-    state <- Durable.state
-    sockets <- Durable.sockets room
-    apiKey <- Durable.optional "DEEPSEEK_API_KEY"
-    in
-      do
-        Sql.execute state createImages unit
-        stored <- Storage.get state messagesKey
-        legacy <- case stored of
-          Just _ -> pure Nothing
-          Nothing -> map (map upgrade) <$> Storage.get state legacyKey
-        messages <- liftEffect $ Ref.new $ fromMaybe [] $ stored <|> legacy
-        let
-          -- One channel per event: `cmap` narrows the socket to that case.
-          posted = cmap (inj (Proxy :: Proxy "message")) sockets :: Sockets Message
-          updated = cmap (inj (Proxy :: Proxy "updated")) sockets :: Sockets Message
-          joined = cmap (inj (Proxy :: Proxy "joined")) sockets :: Sockets String
-          left = cmap (inj (Proxy :: Proxy "left")) sockets :: Sockets String
-          typing = cmap (inj (Proxy :: Proxy "typing")) sockets :: Sockets String
+-- | The assistant as an agent over the room: the room's own capabilities are
+-- | its tools, and the model (in `Aff`) is hoisted into `Runtime`.
+agentFor :: Room -> Maybe (Agent Runtime String String)
+agentFor r = r.assistant <#> \model -> mount (Model.hoist liftAff model) [ whoIsHere ] persona
+  where
+  whoIsHere = tool "members" "Who is in the room right now" (Schema.object {}) (Schema.array Schema.string) \_ -> members r
 
-          save :: Array Message -> Runtime Unit
-          save all = do
-            Storage.put state messagesKey all
-            liftEffect $ Ref.write all messages
-
-          record :: NewMessage -> Runtime Message
-          record new = do
-            sentAt <- liftEffect $ unwrap <<< unInstant <$> now
-            all <- liftEffect $ Ref.read messages
-            let
-              message =
-                { id: maybe 1 (\m -> m.id + 1) (last all)
-                , author: new.author
-                , text: new.text
-                , images: new.images
-                , replyTo: new.replyTo
-                , mentions: Markdown.mentions new.text
-                , reactions: []
-                , sentAt
-                }
-            save $ takeEnd keptMessages $ snoc all message
-            Sockets.broadcast posted message
-            pure message
-
-          members :: forall e. Rpc e (Array String)
-          members = nub <<< map _.tag <$> Sockets.connected sockets
-
-          post :: NewMessage -> Rpc PostError Message
-          post new = do
-            let author = trim new.author
-            let body = trim new.text
-            when (author == "") $ fail AuthorRequired
-            when (body == "" && new.images == []) $ fail TextRequired
-            when (length body > maxTextLength) $ fail TextTooLong
-            all <- liftEffect $ Ref.read messages
-            for_ new.replyTo \id -> unless (any (\m -> m.id == id) all) $ fail $ NoSuchReply id
-            for_ new.images \id -> do
-              found <- Sql.first state imageExists id
-              unless (isJust found) $ fail $ NoSuchImage id
-            message <- liftRuntime $ record new { author = author, text = body }
-            when (mentionsAssistant body && author /= assistantName) do
-              queued <- fromMaybe [] <$> Storage.get state pendingKey
-              Storage.put state pendingKey (snoc queued message.id)
-              Alarm.scheduleIn state (Milliseconds 0.0)
-            pure message
-
-          -- Toggle `by` on `emoji`; a reaction nobody holds disappears.
-          react :: { id :: Int, emoji :: String, by :: String } -> Rpc ReactError Message
-          react { id, emoji, by } = do
-            when (trim emoji == "") $ fail EmojiRequired
-            all <- liftEffect $ Ref.read messages
-            case find (\m -> m.id == id) all of
-              Nothing -> fail $ NoSuchMessage id
-              Just message -> do
-                let
-                  toggled = case find (\r -> r.emoji == emoji) message.reactions of
-                    Nothing -> snoc message.reactions { emoji, by: [ by ] }
-                    Just r ->
-                      let by' = if by `elem` r.by then filter (_ /= by) r.by else snoc r.by by
-                      in
-                        filter (\x -> x.by /= []) $ message.reactions <#> \x -> if x.emoji == emoji then x { by = by' } else x
-                  message' = message { reactions = toggled }
-                liftRuntime do
-                  save $ all <#> \m -> if m.id == id then message' else m
-                  Sockets.broadcast updated message'
-                pure message'
-
-          -- The assistant, as an agent over the room: recent messages are its
-          -- prompt, the room's own capabilities are its tools. It replies in
-          -- the thread of the message that mentioned it.
-          answer :: Runtime Unit
-          answer = do
-            pending <- fromMaybe [] <$> Storage.get state pendingKey
-            unless (pending == []) do
-              void $ Storage.delete state pendingKey
-              Sockets.broadcast typing assistantName
-              recent <- takeEnd 20 <$> liftEffect (Ref.read messages)
-              let
-                whoIsHere = tool "members" "Who is in the room right now" (Schema.object {}) (Schema.array Schema.string)
-                  \_ -> nub <<< map _.tag <$> Sockets.connected sockets
-                transcript = joinWith "\n" $ recent <#> \m -> m.author <> ": " <> m.text
-                persona = text $ "You are '" <> assistantName <> "', a member of a small chat room. Reply in one or two short sentences, "
-                  <> "as yourself, to whoever mentioned you last. Markdown is fine. Do not prefix your name."
-              reply <- case apiKey of
-                Nothing -> pure $ Left $ Model.Misconfigured "DEEPSEEK_API_KEY is not set"
-                Just key -> invoke (mount (Model.hoist liftAff (modelFor key)) [ whoIsHere ] persona) transcript
-              void $ record
-                { author: assistantName
-                , images: []
-                , replyTo: last pending
-                , text: case reply of
-                    Right said -> said
-                    Left failure -> "(I could not answer: " <> show failure <> ")"
-                }
-
-        pure $ Durable.handlers
-          { post
-          , react
-          , history: \_ -> liftEffect $ Ref.read messages
-          , members: \_ -> members
-          , typing: Sockets.broadcast typing
-          }
-          # _
-            { alarm = answer
-            , fetch = images state
-            , connect = \socket -> Sockets.broadcast joined socket.tag
-            , disconnect = \socket -> Sockets.broadcast left socket.tag
-            }
+-- | Runs from the alarm, so the reply survives the request that asked for
+-- | it. Recent messages are the prompt; the reply threads under the last
+-- | message that mentioned the assistant.
+answer :: Room -> Runtime Unit
+answer r = do
+  pending <- fromMaybe [] <$> Storage.get r.state pendingKey
+  unless (null pending) do
+    void $ Storage.delete r.state pendingKey
+    Sockets.broadcast r.emit.typing assistantName
+    transcript <- recap <<< takeEnd 20 <$> liftEffect (Ref.read r.messages)
+    reply <- maybe (pure $ Left $ Model.Misconfigured "DEEPSEEK_API_KEY is not set") (_ `invoke` transcript) (agentFor r)
+    void $ record r
+      { author: assistantName
+      , images: []
+      , replyTo: last pending
+      , text: either (\failure -> "(I could not answer: " <> show failure <> ")") identity reply
+      }
+  where
+  recap = joinWith "\n" <<< map \m -> m.author <> ": " <> m.text

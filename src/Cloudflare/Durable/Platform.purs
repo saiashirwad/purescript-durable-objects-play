@@ -8,8 +8,9 @@ module Cloudflare.Durable.Platform
 
 import Prelude
 
+import Cloudflare.Durable.Container as Container
 import Cloudflare.Durable.Core (Id(..), Namespace, Object, namespace)
-import Cloudflare.Durable.Runtime (Exit(..), Launch(..), Listing, RawContainer, RawSockets, Socket, State(..))
+import Cloudflare.Durable.Runtime (Exit(..), Launch, Listing, RawContainer, RawSockets, Socket, State(..))
 import Cloudflare.Worker (Request, Response)
 import Control.Promise (Promise, toAffE)
 import Data.Argonaut.Core (Json)
@@ -52,10 +53,10 @@ foreign import containerExit :: Foreign -> Effect (Promise { code :: Nullable In
 containerFromContext :: Foreign -> RawContainer
 containerFromContext ctx =
   { running: liftEffect $ containerRunning ctx
-  , start: \(Launch launch) -> liftEffect $ containerStart ctx
-      { env: Object.fromFoldable (Map.toUnfoldable launch.env :: Array _)
-      , entrypoint: toNullable $ unwrap launch.entrypoint
-      , enableInternet: unwrap launch.internet
+  , start: \(launch :: Launch) -> liftEffect $ containerStart ctx
+      { env: Object.fromFoldable (Map.toUnfoldable (Container.environment launch) :: Array _)
+      , entrypoint: toNullable $ Container.command launch
+      , enableInternet: Container.internet launch
       }
   , probe: \port -> toAffE $ containerProbe ctx port
   , request: \port req -> toAffE $ containerRequest ctx port req
@@ -66,6 +67,7 @@ containerFromContext ctx =
       _, Just why -> Lost why
       _, _ -> Exited 0
   }
+
 foreign import socketsBroadcast :: Foreign -> Json -> Effect Unit
 foreign import socketsSend :: Foreign -> String -> Json -> Effect Unit
 foreign import socketsConnected :: Foreign -> Effect (Array Socket)

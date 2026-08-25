@@ -21,7 +21,7 @@ import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Compat as Compat
 import Data.Codec.Argonaut.Record as CAR
 import Data.Either (Either(..), either, note)
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe, fromMaybe, maybe)
 import Data.Traversable (traverse)
 import Data.Tuple.Nested ((/\))
 import Effect (Effect)
@@ -59,14 +59,10 @@ encodeMessage = J.fromObject <<< Object.fromFoldable <<< case _ of
   System text -> [ "role" /\ J.fromString "system", "content" /\ J.fromString text ]
   User text -> [ "role" /\ J.fromString "user", "content" /\ J.fromString text ]
   Assistant { text, toolCalls } ->
-    [ "role" /\ J.fromString "assistant", "content" /\ maybe' J.jsonNull J.fromString text ]
+    [ "role" /\ J.fromString "assistant", "content" /\ maybe J.jsonNull J.fromString text ]
       <> (if toolCalls == [] then [] else [ "tool_calls" /\ J.fromArray (encodeCall <$> toolCalls) ])
   ToolResult { callId, content } ->
     [ "role" /\ J.fromString "tool", "tool_call_id" /\ J.fromString callId, "content" /\ J.fromString content ]
-  where
-  maybe' z f = case _ of
-    Nothing -> z
-    Just x -> f x
 
 encodeCall :: ToolCall -> Json
 encodeCall call = J.fromObject $ Object.fromFoldable

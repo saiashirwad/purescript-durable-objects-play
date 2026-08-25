@@ -20,7 +20,7 @@ import Cloudflare.Durable.Codec (class HasCodec, codec)
 import Cloudflare.Durable.Runtime (class MonadRuntime, State(..), liftRuntime, platform, platformError)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
-import Data.Either (Either(..))
+import Data.Either (either)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Argonaut.Core (Json)
@@ -81,9 +81,7 @@ deleteAll :: forall m. MonadRuntime m => State -> m Unit
 deleteAll (State s) = liftRuntime $ platform "storage.deleteAll" s.deleteAll
 
 decodeAs :: forall m a. MonadRuntime m => String -> JsonCodec a -> Json -> m a
-decodeAs operation c json = case CA.decode c json of
-  Right value -> pure value
-  Left err -> liftRuntime $ platformError operation $ CA.printJsonDecodeError err
+decodeAs operation c = either (liftRuntime <<< platformError operation <<< CA.printJsonDecodeError) pure <<< CA.decode c
 
 dropPrefix :: String -> String -> String
 dropPrefix p name = fromMaybe name $ stripPrefix (Pattern p) name

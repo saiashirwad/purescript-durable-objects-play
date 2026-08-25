@@ -14,7 +14,7 @@ import Data.Array (fromFoldable)
 import Data.Map as Map
 import Data.Maybe (isJust)
 import Data.Time.Duration (Milliseconds(..))
-import Data.Traversable (for_)
+import Data.Foldable (traverse_)
 
 type ReminderApi =
   ( remind :: { after :: Number, note :: String } -> Rpc NoError Unit
@@ -42,19 +42,18 @@ reminderLive =
   Durable.implementWith reminder ado
     state <- Durable.state
     in
-      pure $ Durable.handlers
-        { remind: \{ after, note } -> do
-            Storage.put state noteKey note
-            Alarm.scheduleIn state (Milliseconds after)
-        , pending: \_ -> isJust <$> Alarm.scheduled state
-        , fired: \_ -> fromFoldable <<< Map.values <$> Storage.list state fired
-        , forget: \_ -> Storage.deleteAll state
-        }
-        # _
-          { alarm = do
-              note <- Storage.get state noteKey
-              for_ note \text -> do
-                done <- Storage.list state fired
-                Storage.put state (fired `Storage.at` show (Map.size done)) text
-                void $ Storage.delete state noteKey
+      pure $
+        ( Durable.handlers
+            { remind: \{ after, note } -> do
+                Storage.put state noteKey note
+                Alarm.scheduleIn state (Milliseconds after)
+            , pending: \_ -> isJust <$> Alarm.scheduled state
+            , fired: \_ -> fromFoldable <<< Map.values <$> Storage.list state fired
+            , forget: \_ -> Storage.deleteAll state
+            }
+        )
+          { alarm = Storage.get state noteKey >>= traverse_ \text -> do
+              done <- Storage.list state fired
+              Storage.put state (fired `Storage.at` show (Map.size done)) text
+              void $ Storage.delete state noteKey
           }

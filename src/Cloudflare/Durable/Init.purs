@@ -14,12 +14,12 @@ module Cloudflare.Durable.Init
 import Prelude
 
 import Cloudflare.Durable.Runtime (RawContainer, RawSockets, Runtime, State, platformError)
-import Data.Maybe.First (First(..))
-import Cloudflare.Static (Static, static)
+import Cloudflare.Static (Static, asks, static)
 import Cloudflare.Static (build, plan) as Static
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe.First (First(..))
 
 -- | What the object asks of the deployment: bound variables, and at most one
 -- | container image (`First`: the first declaration wins).
@@ -48,20 +48,18 @@ type Env = { state :: State, variables :: Map String String, sockets :: RawSocke
 type Init = Static Plan Env Runtime
 
 state :: Init State
-state = static mempty \env -> pure env.state
+state = asks _.state
 
 -- | Declare the image this object runs. The handle comes back typed in
 -- | `Cloudflare.Durable.Container`; the image goes into the plan, and from
 -- | there into wrangler config.
 container :: Image -> Init RawContainer
-container image = static { variables: [], container: First (Just image) } \env -> pure env.container
+container image = static ((mempty :: Plan) { container = First (Just image) }) (pure <<< _.container)
 
 -- | A variable that may be unbound: `Nothing` then, no failure.
 optional :: String -> Init (Maybe String)
-optional name = static { variables: [ name ], container: mempty } \env -> pure $ Map.lookup name env.variables
+optional name = static ((mempty :: Plan) { variables = [ name ] }) (pure <<< Map.lookup name <<< _.variables)
 
 variable :: String -> Init String
-variable name = static { variables: [ name ], container: mempty } \env ->
-  case Map.lookup name env.variables of
-    Just value -> pure value
-    Nothing -> platformError ("variable " <> show name) "not bound"
+variable name = static ((mempty :: Plan) { variables = [ name ] }) $
+  maybe (platformError ("variable " <> show name) "not bound") pure <<< Map.lookup name <<< _.variables

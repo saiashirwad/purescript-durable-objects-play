@@ -28,14 +28,15 @@ module Cloudflare.Durable.Core
   , namespace
   , newUniqueId
   , object
+  , printId
   , sockets
   ) where
 
 import Prelude
 
-import Cloudflare.Durable.Events (class DecodeEvents, class EncodeEvents, Signal(..), decodeEvents, encodeEvents, unwire)
 import Cloudflare.Durable.Container (Container)
 import Cloudflare.Durable.Container as Container
+import Cloudflare.Durable.Events (class DecodeEvents, class EncodeEvents, Signal, decodeEvents, decoded, encodeEvents, unwire)
 import Cloudflare.Durable.Init (Env, Image, Init)
 import Cloudflare.Durable.Init as Init
 import Cloudflare.Durable.Protocol (class Connect, class MethodNames, class Serve, RawCall, RawHandler, connect, methodNames, serve)
@@ -43,18 +44,18 @@ import Cloudflare.Durable.Runtime (Runtime, Socket)
 import Cloudflare.Durable.Runtime as Runtime
 import Cloudflare.Durable.Sockets (Sockets)
 import Cloudflare.Durable.Sockets as Sockets
-import Cloudflare.Static (static)
+import Cloudflare.Static (asks)
 import Cloudflare.Worker (Request, Response)
 import Cloudflare.Worker as Worker
-import Data.Newtype (unwrap)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
-import Data.Codec.Argonaut (JsonDecodeError, printJsonDecodeError)
+import Data.Codec.Argonaut (JsonDecodeError)
 import Data.Codec.Argonaut as CA
-import Data.Either (Either(..), either)
+import Data.Either (Either(..))
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Newtype (unwrap)
 import Data.Symbol (class IsSymbol, reflectSymbol)
 import Data.Tuple (Tuple(..))
 import Data.Variant (Variant, case_)
@@ -63,6 +64,11 @@ import Effect.Aff (Aff, error, throwError)
 import Prim.RowList (class RowToList)
 import Type.Proxy (Proxy(..))
 
+-- Objects -------------------------------------------------------------------
+
+-- | The contract of one Durable Object class: its name, and both ends of
+-- | every method (`serve` for the object, `connect` for its callers), plus
+-- | both ends of every event.
 newtype Object :: Symbol -> Row Type -> Row Type -> Type
 newtype Object name api events = Object
   { name :: String
@@ -105,13 +111,9 @@ emitting
   => Object name api ()
   -> Record spec
   -> Object name api events
-emitting (Object o) spec = Object
-  { name: o.name
-  , methods: o.methods
-  , serve: o.serve
-  , connect: o.connect
-  , encodeEvent: encodeEvents list spec
-  , decodeEvent: \json -> do
+emitting (Object o) spec = Object o
+  { encodeEvent = encodeEvents list spec
+  , decodeEvent = \json -> do
       Tuple tag value <- unwire json
       fromMaybe (Left $ CA.Named "event" $ CA.UnexpectedValue $ J.fromString tag) $ decodeEvents list spec tag value
   }
@@ -129,6 +131,8 @@ loopback (Object o) impl = o.connect \name request ->
   case Map.lookup name (o.serve impl) of
     Just handle -> handle request
     Nothing -> throwError $ error $ o.name <> " has no method " <> show name
+
+-- Implementations ------------------------------------------------------------
 
 -- | What activation yields. `alarm` runs when a scheduled alarm is due;
 -- | `connect` and `disconnect` run as sockets come and go; each is a monoid
@@ -150,10 +154,16 @@ noFetch _ = pure $ Worker.text 404 "this object serves no HTTP"
 handlers :: forall api. Record api -> Handlers api
 handlers methods = { methods, alarm: mempty, connect: mempty, disconnect: mempty, fetch: noFetch }
 
+-- | The object's sockets, typed by its event row. Use during `Init` like `state`.
+sockets :: forall name api events. Object name api events -> Init (Sockets (Variant events))
+sockets (Object o) = asks $ Sockets.fromRaw o.encodeEvent <<< _.sockets
+
 -- | The container declared with an `Image`, as a typed handle.
 container :: Image -> Init Container
 container = map Container.fromRaw <<< Init.container
 
+-- | An object and its implementation: an `Init` that plans what the object
+-- | needs, then a `Runtime` that builds its handlers once per activation.
 newtype Live :: Symbol -> Row Type -> Row Type -> Type
 newtype Live name api events = Live
   { object :: Object name api events
@@ -166,10 +176,6 @@ implement o = implementWith o <<< map (map handlers)
 implementWith :: forall name api events. Object name api events -> Init (Runtime (Handlers api)) -> Live name api events
 implementWith o activation = Live { object: o, activate: activation }
 
--- | The object's sockets, typed by its event row. Use during `Init` like `state`.
-sockets :: forall name api events. Object name api events -> Init (Sockets (Variant events))
-sockets (Object o) = static mempty \env -> pure $ Sockets.fromRaw o.encodeEvent env.sockets
-
 type Manifest = { className :: String, methods :: Array String, variables :: Array String, container :: Maybe Image }
 
 manifest :: forall name api events. Live name api events -> Manifest
@@ -178,6 +184,8 @@ manifest (Live { object: Object o, activate: activation }) =
   where
   plan = Init.plan activation
 
+-- | The handlers as the platform calls them: untyped methods, and hooks in
+-- | plain `Aff` whose failures are exceptions.
 type Activated =
   { methods :: Map String RawHandler
   , alarm :: Aff Unit
@@ -186,23 +194,19 @@ type Activated =
   , fetch :: Request -> Aff Response
   }
 
--- | Hooks rethrow a `PlatformError` as an exception so the platform sees it
--- | (and retries an alarm).
 activate :: forall name api events. Live name api events -> Env -> Aff Activated
-activate (Live { object: Object o, activate: activation }) env = do
-  outcome <- Runtime.run $ join $ Init.build activation env
-  case outcome of
+activate (Live { object: Object o, activate: activation }) env =
+  Runtime.run (join $ Init.build activation env) >>= case _ of
     Right active -> pure
       { methods: o.serve active.methods
-      , alarm: rethrow active.alarm
-      , connect: rethrow <<< active.connect
-      , disconnect: rethrow <<< active.disconnect
-      , fetch: rethrow <<< active.fetch
+      , alarm: Runtime.rethrow active.alarm
+      , connect: Runtime.rethrow <<< active.connect
+      , disconnect: Runtime.rethrow <<< active.disconnect
+      , fetch: Runtime.rethrow <<< active.fetch
       }
     Left failure -> throwError $ error $ o.name <> " failed to activate: " <> show failure
-  where
-  rethrow :: forall a. Runtime a -> Aff a
-  rethrow action = Runtime.run action >>= either (throwError <<< error <<< show) pure
+
+-- Ids ----------------------------------------------------------------------
 
 data Id
   = Named String
@@ -215,12 +219,20 @@ instance showId :: Show Id where
   show (Named name) = "(Named " <> show name <> ")"
   show (Unique id) = "(Unique " <> show id <> ")"
 
+-- | Unique ids print as hex; named ids print as their name.
+printId :: Id -> String
+printId = case _ of
+  Unique hex -> hex
+  Named name -> name
+
 newtype ObjectId :: Symbol -> Type
 newtype ObjectId name = ObjectId Id
 
 derive newtype instance eqObjectId :: Eq (ObjectId name)
 derive newtype instance ordObjectId :: Ord (ObjectId name)
 derive newtype instance showObjectId :: Show (ObjectId name)
+
+-- Namespaces ----------------------------------------------------------------
 
 type Listener = Signal Json -> Effect Unit
 
@@ -234,33 +246,22 @@ type Transport =
   , fetch :: Id -> Request -> Aff Response
   }
 
+-- | An object's contract paired with a way to reach its instances. Every
+-- | typed operation below is the untyped transport seen through the contract.
 newtype Namespace :: Symbol -> Row Type -> Row Type -> Type
 newtype Namespace name api events = Namespace
-  { name :: String
-  , stub :: Id -> Record api
-  , call :: Id -> RawCall
-  , unique :: Aff Id
-  , listen :: Id -> String -> Listener -> Effect (Effect Unit)
-  , fetch :: Id -> Request -> Aff Response
-  , decodeEvent :: Json -> Either JsonDecodeError (Variant events)
+  { object :: Object name api events
+  , transport :: Transport
   }
 
 namespace :: forall name api events. Object name api events -> Transport -> Namespace name api events
-namespace (Object o) transport = Namespace
-  { name: o.name
-  , stub: o.connect <<< transport.call
-  , call: transport.call
-  , unique: transport.unique
-  , listen: transport.listen
-  , fetch: transport.fetch
-  , decodeEvent: o.decodeEvent
-  }
-
-getByName :: forall name api events. Namespace name api events -> String -> Record api
-getByName (Namespace ns) = ns.stub <<< Named
+namespace o t = Namespace { object: o, transport: t }
 
 get :: forall name api events. Namespace name api events -> ObjectId name -> Record api
-get (Namespace ns) (ObjectId id) = ns.stub id
+get (Namespace { object: Object o, transport }) (ObjectId id) = o.connect (transport.call id)
+
+getByName :: forall name api events. Namespace name api events -> String -> Record api
+getByName ns = get ns <<< ObjectId <<< Named
 
 -- | Subscribe to an object's events as `tag`. Returns the unsubscribe. The
 -- | shape is `makeEmitter`'s, so `makeEmitter (listen ns id tag)` is an `Emitter`.
@@ -271,28 +272,22 @@ listen
   -> String
   -> (Signal (Variant events) -> Effect Unit)
   -> Effect (Effect Unit)
-listen (Namespace ns) (ObjectId id) tag deliver = ns.listen id tag $ deliver <<< case _ of
-  Delivered json -> either (Garbled <<< printJsonDecodeError) Delivered $ ns.decodeEvent json
-  Opened -> Opened
-  Closed -> Closed
-  Garbled m -> Garbled m
+listen (Namespace { object: Object o, transport }) (ObjectId id) tag deliver =
+  transport.listen id tag $ deliver <<< decoded o.decodeEvent
 
 -- | Plain HTTP into an object's `fetch` hook. Worker side and simulator;
 -- | a browser reaches it through `Http.route` at `.../http/<path>`.
 http :: forall name api events. Namespace name api events -> ObjectId name -> Request -> Aff Response
-http (Namespace ns) (ObjectId id) = ns.fetch id
+http (Namespace { transport }) (ObjectId id) = transport.fetch id
+
+newUniqueId :: forall name api events. Namespace name api events -> Aff (ObjectId name)
+newUniqueId (Namespace { transport }) = ObjectId <$> transport.unique
 
 idFromName :: forall name api events. Namespace name api events -> String -> ObjectId name
 idFromName _ = ObjectId <<< Named
 
-newUniqueId :: forall name api events. Namespace name api events -> Aff (ObjectId name)
-newUniqueId (Namespace ns) = ObjectId <$> ns.unique
-
--- | Unique ids print as hex; named ids print as their name.
-idToString :: forall name. ObjectId name -> String
-idToString (ObjectId id) = case id of
-  Unique hex -> hex
-  Named name -> name
-
 idFromString :: forall name api events. Namespace name api events -> String -> ObjectId name
 idFromString _ = ObjectId <<< Unique
+
+idToString :: forall name. ObjectId name -> String
+idToString (ObjectId id) = printId id

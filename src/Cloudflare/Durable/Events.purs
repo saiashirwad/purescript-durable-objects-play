@@ -6,6 +6,7 @@ module Cloudflare.Durable.Events
   , class DecodeEvents
   , class EncodeEvents
   , decodeEvents
+  , decoded
   , encodeEvents
   , event
   , eventWith
@@ -18,9 +19,9 @@ import Prelude
 import Cloudflare.Durable.Codec (class HasCodec, codec)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
-import Data.Codec.Argonaut (JsonCodec, JsonDecodeError(..))
+import Data.Codec.Argonaut (JsonCodec, JsonDecodeError(..), printJsonDecodeError)
 import Data.Codec.Argonaut as CA
-import Data.Either (Either, note)
+import Data.Either (Either, either, note)
 import Data.Maybe (Maybe(..))
 import Data.Symbol (class IsSymbol, reflectSymbol)
 import Data.Tuple (Tuple(..))
@@ -42,6 +43,9 @@ eventWith = Event
 
 -- | What a listener sees: the connection opening and closing, each decoded
 -- | event, and anything that failed to decode.
+-- |
+-- | A monad in the shape of `Maybe`, with reasons: `Delivered` is `pure`,
+-- | the other three end a `bind` early.
 data Signal a
   = Opened
   | Closed
@@ -50,6 +54,25 @@ data Signal a
 
 derive instance functorSignal :: Functor Signal
 derive instance eqSignal :: Eq a => Eq (Signal a)
+
+instance applySignal :: Apply Signal where
+  apply = ap
+
+instance applicativeSignal :: Applicative Signal where
+  pure = Delivered
+
+instance bindSignal :: Bind Signal where
+  bind = case _ of
+    Delivered a -> \k -> k a
+    Opened -> const Opened
+    Closed -> const Closed
+    Garbled why -> const (Garbled why)
+
+instance monadSignal :: Monad Signal
+
+-- | Decode what was delivered; a failure is `Garbled`.
+decoded :: forall a. (Json -> Either JsonDecodeError a) -> Signal Json -> Signal a
+decoded decode = (_ >>= either (Garbled <<< printJsonDecodeError) Delivered <<< decode)
 
 instance showSignal :: Show a => Show (Signal a) where
   show = case _ of

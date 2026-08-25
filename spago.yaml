@@ -17,13 +17,13 @@ package:
     - either
     - foldable-traversable
     - foreign
-    - formatters
     - foreign-object
+    - formatters
     - functions
     - functors
-    - invariant
     - halogen
     - halogen-subscriptions
+    - invariant
     - maybe
     - newtype
     - now
@@ -32,6 +32,7 @@ package:
     - parallel
     - prelude
     - profunctor
+    - profunctor-lenses
     - record
     - refs
     - strings

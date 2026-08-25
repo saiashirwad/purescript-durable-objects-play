@@ -12,6 +12,7 @@ module Cloudflare.Durable.Runtime
   , liftRuntime
   , platform
   , platformError
+  , rethrow
   , run
   ) where
 
@@ -24,15 +25,16 @@ import Control.Monad.Rec.Class (class MonadRec)
 import Data.Argonaut.Core (Json)
 import Data.Bifunctor (lmap)
 import Data.DateTime.Instant (Instant)
-import Data.Either (Either)
+import Data.Either (Either, either)
 import Data.Maybe (Maybe)
 import Data.Tuple (Tuple)
 import Cloudflare.Worker (Request, Response)
-import Data.Map (Map)
-import Data.Map as Map
+import Data.Map (SemigroupMap)
 import Data.Maybe.Last (Last)
 import Data.Monoid.Conj (Conj)
-import Effect.Aff (Aff, attempt, message)
+import Data.Newtype (class Newtype)
+import Data.Semigroup.Last as Semigroup
+import Effect.Aff (Aff, attempt, error, message)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
 
@@ -75,24 +77,19 @@ type RawSockets =
   , connected :: Aff (Array Socket)
   }
 
--- | How to start a container. A monoid: `env` unions, the last `entrypoint`
--- | wins, internet stays on unless someone turns it off. `mempty` is the
+-- | How to start a container. A product of monoids, so the record is one
+-- | too: later `env` entries win (`Last`), the last `entrypoint` wins,
+-- | internet stays on unless someone turns it off (`Conj`). `mempty` is the
 -- | image's own defaults.
 newtype Launch = Launch
-  { env :: Map String String
+  { env :: SemigroupMap String (Semigroup.Last String)
   , entrypoint :: Last (Array String)
   , internet :: Conj Boolean
   }
 
-instance semigroupLaunch :: Semigroup Launch where
-  append (Launch a) (Launch b) = Launch
-    { env: Map.union b.env a.env
-    , entrypoint: a.entrypoint <> b.entrypoint
-    , internet: a.internet <> b.internet
-    }
-
-instance monoidLaunch :: Monoid Launch where
-  mempty = Launch { env: Map.empty, entrypoint: mempty, internet: mempty }
+derive instance newtypeLaunch :: Newtype Launch _
+derive newtype instance semigroupLaunch :: Semigroup Launch
+derive newtype instance monoidLaunch :: Monoid Launch
 
 -- | How a container run ended.
 data Exit
@@ -141,6 +138,11 @@ instance monoidRuntime :: Monoid a => Monoid (Runtime a) where
 
 run :: forall a. Runtime a -> Aff (Either PlatformError a)
 run (Runtime action) = runExceptT action
+
+-- | Into plain `Aff`, a `PlatformError` becoming an exception the platform
+-- | sees (and retries an alarm for).
+rethrow :: Runtime ~> Aff
+rethrow action = run action >>= either (throwError <<< error <<< show) pure
 
 platform :: forall a. String -> Aff a -> Runtime a
 platform operation action = Runtime $ ExceptT $

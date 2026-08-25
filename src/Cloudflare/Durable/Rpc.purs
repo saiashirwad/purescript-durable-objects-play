@@ -20,23 +20,14 @@ import Control.Monad.Except (ExceptT(..), runExceptT, withExceptT)
 import Control.Monad.Rec.Class (class MonadRec)
 import Data.Bifunctor (class Bifunctor, lmap)
 import Data.Codec.Argonaut (JsonCodec)
-import Data.Codec.Argonaut as CA
 import Data.Either (Either)
-import Data.Maybe (Maybe(..))
 import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
 
-newtype NoError = NoError Void
-
-instance showNoError :: Show NoError where
-  show (NoError v) = absurd v
-
-instance eqNoError :: Eq NoError where
-  eq (NoError v) _ = absurd v
-
-instance hasCodecNoError :: HasCodec NoError where
-  codec = CA.prismaticCodec "NoError" (const Nothing) (\(NoError v) -> absurd v) CA.json
+-- | The error type of a method that cannot fail: there is no value to encode
+-- | and none to decode. `infallible` lifts such a call into any `Rpc e`.
+type NoError = Void
 
 data RpcFailure e
   = DomainError e
@@ -82,7 +73,7 @@ instance bifunctorRpc :: Bifunctor Rpc where
   bimap f g (Rpc action) = Rpc $ map g $ withExceptT (map f) action
 
 infallible :: forall e a. Rpc NoError a -> Rpc e a
-infallible = lmap \(NoError v) -> absurd v
+infallible = lmap absurd
 
 newtype Method e req res = Method
   { request :: JsonCodec req

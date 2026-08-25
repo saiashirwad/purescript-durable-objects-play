@@ -6,6 +6,7 @@ module Chat.Markdown
   , Inline(..)
   , inlines
   , mentions
+  , nodes
   , parse
   , plain
   ) where
@@ -13,7 +14,7 @@ module Chat.Markdown
 import Prelude
 
 import Control.Alt ((<|>))
-import Data.Array (concatMap, cons, drop, nub, null, snoc, span, takeWhile, uncons)
+import Data.Array (concatMap, cons, drop, mapMaybe, nub, null, snoc, span, takeWhile, uncons)
 import Data.Array as Array
 import Data.CodePoint.Unicode (isAlphaNum, isSpace)
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -59,21 +60,29 @@ instance showInline :: Show Inline where
     Link l -> "(Link " <> show l <> ")"
     Mention n -> "(Mention " <> show n <> ")"
 
--- | Every `@name` in the text, once each.
-mentions :: String -> Array String
-mentions = nub <<< concatMap fromBlock <<< parse
+-- | Every inline node in a document, in reading order, nested ones included.
+-- | The one traversal that `mentions` and the like are folds over.
+nodes :: Array Block -> Array Inline
+nodes = concatMap fromBlock
   where
   fromBlock = case _ of
     Paragraph xs -> fromInlines xs
     Heading _ xs -> fromInlines xs
-    Quote bs -> concatMap fromBlock bs
+    Quote bs -> nodes bs
     Bullets items -> concatMap fromInlines items
     Code _ _ -> []
-  fromInlines = concatMap case _ of
-    Mention n -> [ n ]
+  fromInlines = concatMap \x -> cons x case x of
     Bold xs -> fromInlines xs
     Italic xs -> fromInlines xs
     _ -> []
+
+-- | Every `@name` in the text, once each.
+mentions :: String -> Array String
+mentions = nub <<< mapMaybe mention <<< nodes <<< parse
+  where
+  mention = case _ of
+    Mention n -> Just n
+    _ -> Nothing
 
 -- | The text alone, for previews and notifications.
 plain :: String -> String
@@ -111,14 +120,20 @@ blocks lines = case uncons lines of
           cons (Code lang (joinWith "\n" body)) (blocks (drop 1 rest))
     | Just level <- heading head -> cons (Heading level.depth (inlines level.text)) (blocks tail)
     | isQuote head ->
-        let { init: quoted, rest } = span isQuote lines
-        in cons (Quote (blocks (unquote <$> quoted))) (blocks rest)
+        let
+          { init: quoted, rest } = span isQuote lines
+        in
+          cons (Quote (blocks (unquote <$> quoted))) (blocks rest)
     | isBullet head ->
-        let { init: items, rest } = span isBullet lines
-        in cons (Bullets (inlines <<< unbullet <$> items)) (blocks rest)
+        let
+          { init: items, rest } = span isBullet lines
+        in
+          cons (Bullets (inlines <<< unbullet <$> items)) (blocks rest)
     | otherwise ->
-        let { init: para, rest } = span isPlain lines
-        in cons (Paragraph (inlines (joinWith "\n" para))) (blocks rest)
+        let
+          { init: para, rest } = span isPlain lines
+        in
+          cons (Paragraph (inlines (joinWith "\n" para))) (blocks rest)
   where
   isQuote = (_ /= Nothing) <<< stripPrefix (Pattern ">")
   unquote l = fromMaybe l $ stripPrefix (Pattern "> ") l <|> stripPrefix (Pattern ">") l
@@ -149,8 +164,10 @@ inlines = merge <<< go <<< toCodePointArray
           cons (Bold (inlines (str body))) (go rest)
       | c == cp '*', Just (Tuple body rest) <- upTo [ cp '*' ] tail, not (null body) -> cons (Italic (inlines (str body))) (go rest)
       | c == cp '_', Just (Tuple body rest) <- upTo [ cp '_' ] tail, not (null body) -> cons (Italic (inlines (str body))) (go rest)
-      | c == cp '[', Just (Tuple label afterLabel) <- upTo [ cp ']' ] tail
-      , Just { head: p, tail: afterParen } <- uncons afterLabel, p == cp '('
+      | c == cp '['
+      , Just (Tuple label afterLabel) <- upTo [ cp ']' ] tail
+      , Just { head: p, tail: afterParen } <- uncons afterLabel
+      , p == cp '('
       , Just (Tuple url rest) <- upTo [ cp ')' ] afterParen -> cons (Link { text: str label, url: str url }) (go rest)
       | c == cp '@', name <- takeWhile isName tail, not (null name) -> cons (Mention (str name)) (go (drop (Array.length name) tail))
       | Just (Tuple url rest) <- bareUrl cps -> cons (Link { text: str url, url: str url }) (go rest)
@@ -179,8 +196,10 @@ inlines = merge <<< go <<< toCodePointArray
       text = str run
     in
       if stripPrefix (Pattern "http://") text /= Nothing || stripPrefix (Pattern "https://") text /= Nothing then
-        let trimmed = stripTrailing text
-        in Just (Tuple (toCodePointArray trimmed) (drop (S.length trimmed) cps))
+        let
+          trimmed = stripTrailing text
+        in
+          Just (Tuple (toCodePointArray trimmed) (drop (S.length trimmed) cps))
       else Nothing
     where
     stripTrailing t = if CU.takeRight 1 t `Array.elem` [ ".", ",", "!", "?", ":" ] then CU.dropRight 1 t else t

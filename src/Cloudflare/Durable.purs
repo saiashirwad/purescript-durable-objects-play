@@ -20,13 +20,16 @@ import Cloudflare.Durable.Runtime (class MonadRuntime, PlatformError(..), Runtim
 import Cloudflare.Worker (ContainerSpec, WorkerInit, WorkerRef, objectBinding, scriptName)
 import Data.Maybe (Maybe(..))
 
+-- | Host an object in this Worker: the binding, the export, and any
+-- | container image all follow from the `Live`.
 host :: forall name api events. Live name api events -> WorkerInit (Core.Namespace name api events)
-host live@(Live { object }) = bind' object Nothing $ (manifest live).container <#> \i ->
+host live@(Live { object }) = bound object Nothing $ (manifest live).container <#> \i ->
   { image: i.image, instances: i.instances, instanceType: show i.instanceType }
 
+-- | Reach an object hosted by another Worker.
 from :: forall name api events. WorkerRef -> Object name api events -> WorkerInit (Core.Namespace name api events)
-from worker object = bind' object (Just (scriptName worker)) Nothing
+from worker object = bound object (Just (scriptName worker)) Nothing
 
-bind' :: forall name api events. Object name api events -> Maybe String -> Maybe ContainerSpec -> WorkerInit (Core.Namespace name api events)
-bind' object scriptName container = namespaceFromBinding object <$> objectBinding
+bound :: forall name api events. Object name api events -> Maybe String -> Maybe ContainerSpec -> WorkerInit (Core.Namespace name api events)
+bound object scriptName container = namespaceFromBinding object <$> objectBinding
   { className: className object, binding: className object, scriptName, container }

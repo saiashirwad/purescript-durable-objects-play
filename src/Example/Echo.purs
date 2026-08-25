@@ -35,11 +35,12 @@ echoLive =
     state <- Durable.state
     box <- Durable.container (Container.image "./containers/echo/Dockerfile")
     in
-      pure $ Durable.handlers
-        { running: \_ -> Container.running box
-        , halt: \_ -> Container.stop box Terminate
-        }
-        # _
+      pure $
+        ( Durable.handlers
+            { running: \_ -> Container.running box
+            , halt: \_ -> Container.stop box Terminate
+            }
+        )
           { fetch = \request -> do
               Container.ensure box port $ Container.env [ "GREETING" /\ "hello from purescript" ]
               Container.renew state box (Minutes 5.0)

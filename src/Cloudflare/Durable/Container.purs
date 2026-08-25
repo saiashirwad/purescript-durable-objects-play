@@ -12,13 +12,16 @@ module Cloudflare.Durable.Container
   , Port
   , Stop(..)
   , awaitExit
+  , command
   , destroy
   , ensure
   , entrypoint
   , env
+  , environment
   , expire
   , fromRaw
   , image
+  , internet
   , noInternet
   , renew
   , request
@@ -39,11 +42,13 @@ import Cloudflare.Durable.Storage as Storage
 import Cloudflare.Worker (Request, Response)
 import Control.Monad.Rec.Class (Step(..), tailRecM)
 import Data.DateTime.Instant (unInstant)
+import Data.Map (Map, SemigroupMap(..))
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Maybe.Last (Last(..))
 import Data.Monoid.Conj (Conj(..))
-import Data.Newtype (unwrap)
+import Data.Newtype (over, unwrap)
+import Data.Semigroup.Last as Semigroup
 import Data.Time.Duration (class Duration, Milliseconds(..), fromDuration)
 import Data.Tuple (Tuple)
 import Effect.Aff (delay)
@@ -60,14 +65,27 @@ fromRaw = Container
 image :: String -> Image
 image path = { image: path, instances: 3, instanceType: Lite }
 
+-- Launch: three ways to say something, three ways to read it back ----------
+
 env :: Array (Tuple String String) -> Launch
-env pairs = Launch { env: Map.fromFoldable pairs, entrypoint: mempty, internet: mempty }
+env pairs = over Launch _ { env = SemigroupMap $ Semigroup.Last <$> Map.fromFoldable pairs } mempty
 
 entrypoint :: Array String -> Launch
-entrypoint command = Launch { env: Map.empty, entrypoint: Last (Just command), internet: mempty }
+entrypoint argv = over Launch _ { entrypoint = Last (Just argv) } mempty
 
 noInternet :: Launch
-noInternet = Launch { env: Map.empty, entrypoint: mempty, internet: Conj false }
+noInternet = over Launch _ { internet = Conj false } mempty
+
+environment :: Launch -> Map String String
+environment (Launch l) = unwrap <$> unwrap l.env
+
+command :: Launch -> Maybe (Array String)
+command (Launch l) = unwrap l.entrypoint
+
+internet :: Launch -> Boolean
+internet (Launch l) = unwrap l.internet
+
+-- Lifecycle -----------------------------------------------------------------
 
 running :: forall m. MonadRuntime m => Container -> m Boolean
 running (Container c) = liftRuntime $ platform "container.running" c.running
@@ -93,9 +111,7 @@ ensure box@(Container c) port launch = do
     alive <- c.running
     if listening then pure $ Done true
     else if not alive then pure $ Done false
-    else do
-      delay $ Milliseconds 250.0
-      pure $ Loop (tries - 1)
+    else delay (Milliseconds 250.0) $> Loop (tries - 1)
 
 request :: forall m. MonadRuntime m => Container -> Port -> Request -> m Response
 request (Container c) port req = liftRuntime $ platform ("container.request " <> show port) $ c.request port req
@@ -119,6 +135,8 @@ destroy (Container c) = liftRuntime $ platform "container.destroy" c.destroy
 awaitExit :: forall m. MonadRuntime m => Container -> m Exit
 awaitExit (Container c) = liftRuntime $ platform "container.exit" c.exit
 
+-- Idle timeout: `renew` on use, `expire` from the alarm -----------------------
+
 sleepAtKey :: Storage.Key Number
 sleepAtKey = Storage.key "container.sleepAt"
 
@@ -126,8 +144,7 @@ sleepAtKey = Storage.key "container.sleepAt"
 renew :: forall m d. MonadRuntime m => Duration d => State -> Container -> d -> m Unit
 renew state _ idle = do
   now <- Alarm.now state
-  let at = unwrap (unInstant now) + unwrap (fromDuration idle)
-  Storage.put state sleepAtKey at
+  Storage.put state sleepAtKey $ unwrap (unInstant now) + unwrap (fromDuration idle)
   Alarm.scheduleIn state (fromDuration idle)
 
 -- | The alarm half of `renew`: stop the container if its time is up,
@@ -135,8 +152,7 @@ renew state _ idle = do
 expire :: forall m. MonadRuntime m => State -> Container -> m Unit
 expire state box = do
   now <- unwrap <<< unInstant <$> Alarm.now state
-  due <- Storage.get state sleepAtKey
-  case due of
+  Storage.get state sleepAtKey >>= case _ of
     Just at | at <= now -> do
       up <- running box
       when up $ stop box Terminate

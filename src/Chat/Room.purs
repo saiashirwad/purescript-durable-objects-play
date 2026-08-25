@@ -16,9 +16,12 @@ import Cloudflare.Durable (Object)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Codec (class HasCodec)
 import Cloudflare.Durable.Rpc (NoError, Rpc, method)
+import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
 import Data.Maybe (Maybe(..))
+import Data.Tuple (Tuple)
+import Data.Tuple.Nested ((/\))
 
 type Reaction = { emoji :: String, by :: Array String }
 
@@ -54,23 +57,25 @@ instance showPostError :: Show PostError where
     NoSuchReply id -> "(NoSuchReply " <> show id <> ")"
     NoSuchImage id -> "(NoSuchImage " <> show id <> ")"
 
--- | `{ tag, id }` on the wire; a sum with one payload needs no more.
+-- | `{ tag, id }` on the wire; a sum with at most one `Int` payload needs no
+-- | more. `prismaticCodec` is the codec of a partial isomorphism: every
+-- | value prints, only well-formed wire values read.
 instance hasCodecPostError :: HasCodec PostError where
-  codec = CA.prismaticCodec "PostError" from to $ CAR.object "PostError" { tag: CA.string, id: CAR.optional CA.int }
+  codec = tagged "PostError" print read
     where
-    from = case _ of
-      { tag: "AuthorRequired" } -> Just AuthorRequired
-      { tag: "TextRequired" } -> Just TextRequired
-      { tag: "TextTooLong" } -> Just TextTooLong
-      { tag: "NoSuchReply", id: Just id } -> Just (NoSuchReply id)
-      { tag: "NoSuchImage", id: Just id } -> Just (NoSuchImage id)
+    print = case _ of
+      AuthorRequired -> "AuthorRequired" /\ Nothing
+      TextRequired -> "TextRequired" /\ Nothing
+      TextTooLong -> "TextTooLong" /\ Nothing
+      NoSuchReply id -> "NoSuchReply" /\ Just id
+      NoSuchImage id -> "NoSuchImage" /\ Just id
+    read = case _ of
+      "AuthorRequired" /\ _ -> Just AuthorRequired
+      "TextRequired" /\ _ -> Just TextRequired
+      "TextTooLong" /\ _ -> Just TextTooLong
+      "NoSuchReply" /\ Just id -> Just (NoSuchReply id)
+      "NoSuchImage" /\ Just id -> Just (NoSuchImage id)
       _ -> Nothing
-    to = case _ of
-      AuthorRequired -> { tag: "AuthorRequired", id: Nothing }
-      TextRequired -> { tag: "TextRequired", id: Nothing }
-      TextTooLong -> { tag: "TextTooLong", id: Nothing }
-      NoSuchReply id -> { tag: "NoSuchReply", id: Just id }
-      NoSuchImage id -> { tag: "NoSuchImage", id: Just id }
 
 data ReactError = NoSuchMessage Int | EmojiRequired
 
@@ -82,15 +87,22 @@ instance showReactError :: Show ReactError where
     EmojiRequired -> "EmojiRequired"
 
 instance hasCodecReactError :: HasCodec ReactError where
-  codec = CA.prismaticCodec "ReactError" from to $ CAR.object "ReactError" { tag: CA.string, id: CAR.optional CA.int }
+  codec = tagged "ReactError" print read
     where
-    from = case _ of
-      { tag: "NoSuchMessage", id: Just id } -> Just (NoSuchMessage id)
-      { tag: "EmojiRequired" } -> Just EmojiRequired
+    print = case _ of
+      NoSuchMessage id -> "NoSuchMessage" /\ Just id
+      EmojiRequired -> "EmojiRequired" /\ Nothing
+    read = case _ of
+      "NoSuchMessage" /\ Just id -> Just (NoSuchMessage id)
+      "EmojiRequired" /\ _ -> Just EmojiRequired
       _ -> Nothing
-    to = case _ of
-      NoSuchMessage id -> { tag: "NoSuchMessage", id: Just id }
-      EmojiRequired -> { tag: "EmojiRequired", id: Nothing }
+
+tagged :: forall a. String -> (a -> Tuple String (Maybe Int)) -> (Tuple String (Maybe Int) -> Maybe a) -> JsonCodec a
+tagged name print read =
+  CA.prismaticCodec name (read <<< toPair) (fromPair <<< print) $ CAR.object name { tag: CA.string, id: CAR.optional CA.int }
+  where
+  toPair { tag, id } = tag /\ id
+  fromPair (tag /\ id) = { tag, id }
 
 maxTextLength :: Int
 maxTextLength = 4000

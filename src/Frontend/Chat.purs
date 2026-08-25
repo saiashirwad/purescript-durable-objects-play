@@ -16,12 +16,15 @@ import Control.Promise (Promise, toAffE)
 import Data.Array (elem, filter, last, length, take, zip)
 import Data.Array as Array
 import Data.DateTime.Instant (unInstant)
-import Data.Either (Either(..))
+import Data.Either (Either(..), either)
 import Data.Enum (fromEnum)
 import Data.Foldable (traverse_)
+import Data.Traversable (traverse)
+import Data.Lens (Lens', Prism', over, preview, prism')
+import Data.Lens.Record (prop)
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe, isJust)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
 import Data.Newtype (unwrap)
 import Data.String (Pattern(..), drop, joinWith, null, split, stripPrefix, trim)
 import Data.String as String
@@ -39,6 +42,7 @@ import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.Subscription (makeEmitter)
 import Halogen.VDom.Driver (runUI)
+import Type.Proxy (Proxy(..))
 import Web.Event.Event (Event, EventType(..), preventDefault)
 import Web.HTML (window)
 import Web.HTML.HTMLElement (HTMLElement, focus)
@@ -75,10 +79,14 @@ type State =
   }
 
 data View
-  = Locked { passkey :: String, error :: Maybe String, busy :: Boolean }
+  = Locked Locked
   | Lobby { busy :: Boolean }
-  | Joining { id :: RoomId, name :: String }
+  | Joining Joining
   | InRoom RoomView
+
+type Locked = { passkey :: String, error :: Maybe String, busy :: Boolean }
+
+type Joining = { id :: RoomId, name :: String }
 
 type RoomView =
   { id :: RoomId
@@ -100,6 +108,27 @@ type RoomView =
   , sending :: Boolean
   , copied :: Boolean
   }
+
+-- | Optics into the state. A `Lens'` reaches a field, a `Prism'` one case
+-- | of `View`; composed with `<<<` they focus one screen's state, so an
+-- | action for that screen is `over` it and a read is `preview`.
+_view :: Lens' State View
+_view = prop (Proxy :: Proxy "view")
+
+_Locked :: Prism' View Locked
+_Locked = prism' Locked case _ of
+  Locked l -> Just l
+  _ -> Nothing
+
+_Joining :: Prism' View Joining
+_Joining = prism' Joining case _ of
+  Joining j -> Just j
+  _ -> Nothing
+
+_InRoom :: Prism' View RoomView
+_InRoom = prism' InRoom case _ of
+  InRoom r -> Just r
+  _ -> Nothing
 
 data Action
   = Initialize
@@ -134,7 +163,7 @@ main = HA.runHalogenAff do
   body <- HA.awaitBody
   runUI page unit body
 
-page :: forall query input output m. MonadAff m => H.Component query input output m
+page :: forall query input m. MonadAff m => H.Component query input Void m
 page = H.mkComponent
   { initialState: \_ -> { author: "", notifications: "default", view: Lobby { busy: false } }
   , render
@@ -165,7 +194,7 @@ render st = case st.view of
   Joining joining -> joiningView joining
   InRoom r -> roomView st r
 
-lockedView :: forall m. { passkey :: String, error :: Maybe String, busy :: Boolean } -> Html m
+lockedView :: forall m. Locked -> Html m
 lockedView { passkey, error, busy } =
   HH.main [ cls "centered" ]
     [ HH.form [ cls "card", HE.onSubmit Unlock ]
@@ -189,7 +218,7 @@ lobbyView { busy } =
         ]
     ]
 
-joiningView :: forall m. { id :: RoomId, name :: String } -> Html m
+joiningView :: forall m. Joining -> Html m
 joiningView { name } =
   HH.main [ cls "centered" ]
     [ HH.form [ cls "card", HE.onSubmit SubmitName ]
@@ -318,7 +347,7 @@ markdown me = map block <<< Markdown.parse
       | safe url -> HH.a [ HP.href url, HP.target "_blank", HP.rel "noopener noreferrer" ] [ HH.text text ]
       | otherwise -> HH.text text
     Mention name -> HH.span [ cls (if name == me then "mention me" else "mention") ] [ HH.text $ "@" <> name ]
-  safe url = isJust (stripPrefix (Pattern "https://") url) || isJust (stripPrefix (Pattern "http://") url) || isJust (stripPrefix (Pattern "mailto:") url)
+  safe url = Array.any (\scheme -> isJust (stripPrefix (Pattern scheme) url)) [ "https://", "http://", "mailto:" ]
 
 -- | "ann is typing", "ann and bob are typing", or "several people are typing".
 typingLine :: forall m. RoomView -> Html m
@@ -347,18 +376,8 @@ composer :: forall m. String -> RoomView -> Html m
 composer author r =
   HH.footer_
     [ typingLine r
-    , case r.replyTo >>= \id -> Map.lookup id r.messages of
-        Just parent ->
-          HH.div [ cls "reply-chip" ]
-            [ replyIcon
-            , HH.span_ [ HH.text $ "Replying to ", HH.strong_ [ HH.text parent.author ], HH.text $ ": " <> String.take 60 (Markdown.plain parent.text) ]
-            , HH.button [ cls "quiet", HP.title "Cancel", HE.onClick \_ -> Reply Nothing ] [ HH.text "×" ]
-            ]
-        Nothing -> HH.text ""
-    , if r.attachments == [] && not r.uploading then HH.text ""
-      else HH.div [ cls "attachments" ] $
-        (r.attachments <#> \n -> HH.span [ cls "attachment" ] [ HH.img [ HP.src (imageUrl r.id n) ], HH.button [ cls "quiet", HE.onClick \_ -> Detach n ] [ HH.text "×" ] ])
-          <> (if r.uploading then [ HH.span [ cls "attachment uploading" ] [ HH.text "…" ] ] else [])
+    , replyChip r
+    , attachmentStrip r
     , case suggestions author r of
         [] -> HH.text ""
         names -> HH.div [ cls "suggest" ] $ names <#> \n -> HH.button [ cls "quiet", HE.onClick \_ -> PickMention n ] [ avatar n, HH.text n ]
@@ -375,16 +394,34 @@ composer author r =
             , HE.handler (EventType "paste") Pasted
             ]
         , HH.button
-            [ cls "send", HP.type_ HP.ButtonSubmit, HP.title "Send", HP.disabled (r.sending || r.uploading || (null (trim r.draft) && r.attachments == [])) ]
+            [ cls "send", HP.type_ HP.ButtonSubmit, HP.title "Send", HP.disabled (r.sending || r.uploading || not (sendable r)) ]
             [ sendIcon ]
         ]
     , errorLine r.error
     ]
 
-errorLine :: forall m. Maybe String -> Html m
-errorLine = case _ of
-  Just why -> HH.p [ cls "error" ] [ HH.text why ]
+sendable :: RoomView -> Boolean
+sendable r = not (null (trim r.draft)) || r.attachments /= []
+
+replyChip :: forall m. RoomView -> Html m
+replyChip r = case r.replyTo >>= \id -> Map.lookup id r.messages of
   Nothing -> HH.text ""
+  Just parent ->
+    HH.div [ cls "reply-chip" ]
+      [ replyIcon
+      , HH.span_ [ HH.text $ "Replying to ", HH.strong_ [ HH.text parent.author ], HH.text $ ": " <> String.take 60 (Markdown.plain parent.text) ]
+      , HH.button [ cls "quiet", HP.title "Cancel", HE.onClick \_ -> Reply Nothing ] [ HH.text "×" ]
+      ]
+
+attachmentStrip :: forall m. RoomView -> Html m
+attachmentStrip r
+  | r.attachments == [] && not r.uploading = HH.text ""
+  | otherwise = HH.div [ cls "attachments" ] $
+      (r.attachments <#> \n -> HH.span [ cls "attachment" ] [ HH.img [ HP.src (imageUrl r.id n) ], HH.button [ cls "quiet", HE.onClick \_ -> Detach n ] [ HH.text "×" ] ])
+        <> (if r.uploading then [ HH.span [ cls "attachment uploading" ] [ HH.text "…" ] ] else [])
+
+errorLine :: forall m. Maybe String -> Html m
+errorLine = maybe (HH.text "") \why -> HH.p [ cls "error" ] [ HH.text why ]
 
 avatar :: forall w i. String -> HH.HTML w i
 avatar name = HH.span [ cls (if name == assistantName then "avatar bot" else "avatar"), HP.style ("--hue: " <> show (hue name)) ]
@@ -428,8 +465,11 @@ threaded messages = zip ([ false ] <> (continues <$> zip messages (Array.drop 1 
 
 -- Actions ------------------------------------------------------------------
 
-handleAction :: forall output m. MonadAff m => Action -> H.HalogenM State Action () output m Unit
+type App m = H.HalogenM State Action () Void m
+
+handleAction :: forall m. MonadAff m => Action -> App m Unit
 handleAction = case _ of
+  -- Session
   Initialize -> do
     author <- liftEffect $ fromMaybe "" <$> (Storage.getItem authorKey =<< localStorage)
     notifications <- liftEffect notificationPermission
@@ -437,247 +477,222 @@ handleAction = case _ of
     admitted <- liftAff $ toAffE sessionStatus
     if admitted == 204 then enterFromUrl
     else H.modify_ _ { view = Locked { passkey: "", error: Nothing, busy: false } }
-
-  SetPasskey passkey -> H.modify_ \st -> case st.view of
-    Locked l -> st { view = Locked l { passkey = passkey, error = Nothing } }
-    _ -> st
-
+  SetPasskey passkey -> H.modify_ $ over (_view <<< _Locked) _ { passkey = passkey, error = Nothing }
   Unlock event -> do
     liftEffect $ preventDefault event
-    st <- H.get
-    case st.view of
-      Locked l -> do
-        H.modify_ _ { view = Locked l { busy = true } }
-        outcome <- liftAff $ toAffE $ login (trim l.passkey)
-        if outcome == 204 then H.modify_ _ { view = Lobby { busy: false } } *> enterFromUrl
-        else H.modify_ _ { view = Locked l { busy = false, error = Just "That passkey is not right." } }
-      _ -> pure unit
+    H.gets (preview (_view <<< _Locked)) >>= traverse_ \l -> do
+      H.modify_ $ over (_view <<< _Locked) _ { busy = true }
+      admitted <- liftAff $ toAffE $ login (trim l.passkey)
+      if admitted == 204 then H.modify_ _ { view = Lobby { busy: false } } *> enterFromUrl
+      else H.modify_ $ over (_view <<< _Locked) _ { busy = false, error = Just "That passkey is not right." }
 
+  -- Rooms
   CreateRoom -> do
     H.modify_ _ { view = Lobby { busy: true } }
-    id <- liftAff $ Chat.create chat
-    handleAction $ Enter id
-
+    liftAff (Chat.create chat) >>= handleAction <<< Enter
   Enter id -> do
     liftEffect $ Location.setHash (Chat.printRoomId id) =<< location
     { author } <- H.get
     if null (trim author) then H.modify_ _ { view = Joining { id, name: "" } }
     else handleAction $ Join id
-
-  SetName name -> H.modify_ \st -> case st.view of
-    Joining j -> st { view = Joining j { name = name } }
-    _ -> st
-
+  SetName name -> H.modify_ $ over (_view <<< _Joining) _ { name = name }
   SubmitName event -> do
     liftEffect $ preventDefault event
-    st <- H.get
-    case st.view of
-      Joining { id, name } | not null (trim name) -> do
-        liftEffect $ Storage.setItem authorKey (trim name) =<< localStorage
-        H.modify_ _ { author = trim name }
-        handleAction $ Join id
-      _ -> pure unit
-
-  Join id -> do
-    link <- liftEffect $ Location.href =<< location
-    { author } <- H.get
-    let room = Chat.open chat id
-    feed <- H.subscribe $ Notified <$> Chat.listen chat id author
-    ticker <- H.subscribe $ Tick <$ makeEmitter (interval 1000)
-    H.modify_ _
-      { view = InRoom
-          { id, room, link, draft: "", replyTo: Nothing, attachments: [], uploading: false, messages: Map.empty
-          , feed, ticker, online: false, members: [], typing: Map.empty, typingSentAt: 0.0, unread: 0
-          , error: Nothing, sending: false, copied: false
-          }
-      }
-    focusComposer
-
+    H.gets (preview (_view <<< _Joining)) >>= traverse_ \{ id, name } -> unless (null (trim name)) do
+      liftEffect $ Storage.setItem authorKey (trim name) =<< localStorage
+      H.modify_ _ { author = trim name }
+      handleAction $ Join id
+  Join id -> enterRoom id
   ChangeName -> leaveRoom \r st -> st { view = Joining { id: r.id, name: st.author } }
+  Leave -> do
+    liftEffect $ Location.setHash "" =<< location
+    leaveRoom \_ st -> st { view = Lobby { busy: false } }
+  CopyLink -> withRoom \r -> liftEffect (copyText r.link) *> inRoom _ { copied = true }
 
-  Notified signal -> case signal of
-    Opened -> inRoom _ { online = true, error = Nothing } *> reload
-    Closed -> inRoom _ { online = false }
-    Garbled why -> inRoom _ { error = Just $ "Unreadable event: " <> why }
-    Delivered event -> event # match
-      { message: \m -> do
-          pinned <- withMessages nearBottom
-          inRoom \r -> r { messages = Map.insert m.id m r.messages, typing = Map.delete m.author r.typing }
-          { author } <- H.get
-          when (fromMaybe true pinned || m.author == author) $ void $ withMessages scrollToEnd
-          when (m.author /= author) $ announce m (author `elem` m.mentions)
-      , updated: \m -> inRoom \r -> r { messages = Map.insert m.id m r.messages }
-      , joined: \_ -> reload
-      , left: \name -> inRoom (\r -> r { typing = Map.delete name r.typing }) *> reload
-      , typing: \name -> do
-          { author } <- H.get
-          at <- liftEffect nowMs
-          when (name /= author) $ inRoom \r -> r { typing = Map.insert name at r.typing }
-      }
-
+  -- The feed
+  Notified signal -> onSignal signal
   Loaded { messages, members } -> do
     -- Left-biased union: what we already hold wins over the reload.
     inRoom \r -> r { messages = Map.union r.messages (byId messages), members = members }
     void $ withMessages scrollToEnd
-
   Tick -> do
     at <- liftEffect nowMs
     inRoom \r -> r { typing = Map.filter (\seen -> at - seen < typingTtl) r.typing }
     here <- liftEffect $ not <$> away
     when here $ inRoom _ { unread = 0 } *> liftEffect (setTitle "Chat")
-
   EnableNotifications -> do
     outcome <- liftAff $ toAffE requestNotifications
     H.modify_ _ { notifications = outcome }
 
-  SetDraft draft -> do
-    inRoom _ { draft = draft }
-    st <- H.get
-    at <- liftEffect nowMs
-    case st.view of
-      InRoom r | not null (trim draft), at - r.typingSentAt > typingThrottle -> do
-        inRoom _ { typingSentAt = at }
-        void $ liftAff $ Rpc.run $ r.room.typing st.author
-      _ -> pure unit
-
-  KeyDown event -> do
-    st <- H.get
-    case st.view, key event of
-      InRoom r, "Tab" | Just first <- Array.head (suggestions st.author r) -> do
+  -- The composer
+  SetDraft draft -> inRoom _ { draft = draft } *> pingTyping
+  KeyDown event -> withRoom \r -> do
+    { author } <- H.get
+    case key event, Array.head (suggestions author r) of
+      "Tab", Just first -> do
         liftEffect $ preventDefault $ toEvent event
         handleAction $ PickMention first
-      InRoom _, "Escape" -> inRoom _ { replyTo = Nothing }
+      "Escape", _ -> inRoom _ { replyTo = Nothing }
       _, _ -> pure unit
-
   PickMention name -> do
     inRoom \r -> r { draft = replaceLastWord ("@" <> name <> " ") r.draft }
     focusComposer
-
-  Pasted event -> do
-    st <- H.get
-    case st.view of
-      InRoom r -> uploadWith (uploadPasted (imageEndpoint r.id) event)
-      _ -> pure unit
-
-  Attach -> do
-    st <- H.get
-    case st.view of
-      InRoom r -> uploadWith (pickAndUpload (imageEndpoint r.id))
-      _ -> pure unit
-
+  Pasted event -> withRoom \r -> upload $ uploadPasted (imageEndpoint r.id) event
+  Attach -> withRoom \r -> upload $ pickAndUpload (imageEndpoint r.id)
   Attached ids -> inRoom \r -> r { attachments = r.attachments <> ids, uploading = false }
-
   Detach n -> inRoom \r -> r { attachments = filter (_ /= n) r.attachments }
-
   Reply target -> inRoom _ { replyTo = target } *> focusComposer
-
   JumpTo id -> liftEffect $ scrollToId $ "msg-" <> show id
+  React id emoji -> withRoom \r -> do
+    { author } <- H.get
+    liftAff (Rpc.run $ r.room.react { id, emoji, by: author }) >>= either
+      (\failure -> inRoom _ { error = Just $ Chat.describeFailure failure })
+      (\m -> inRoom \v -> v { messages = Map.insert m.id m v.messages })
+  Submit event -> liftEffect (preventDefault event) *> submit
 
-  React id emoji -> do
+-- | The state of the current room, if we are in one.
+inRoom :: forall m. (RoomView -> RoomView) -> App m Unit
+inRoom = H.modify_ <<< over (_view <<< _InRoom)
+
+withRoom :: forall m. MonadAff m => (RoomView -> App m Unit) -> App m Unit
+withRoom k = H.gets (preview (_view <<< _InRoom)) >>= traverse_ k
+
+enterRoom :: forall m. MonadAff m => RoomId -> App m Unit
+enterRoom id = do
+  link <- liftEffect $ Location.href =<< location
+  { author } <- H.get
+  feed <- H.subscribe $ Notified <$> Chat.listen chat id author
+  ticker <- H.subscribe $ Tick <$ makeEmitter (interval 1000)
+  H.modify_ _
+    { view = InRoom
+        { id
+        , room: Chat.open chat id
+        , link
+        , draft: ""
+        , replyTo: Nothing
+        , attachments: []
+        , uploading: false
+        , messages: Map.empty
+        , feed
+        , ticker
+        , online: false
+        , members: []
+        , typing: Map.empty
+        , typingSentAt: 0.0
+        , unread: 0
+        , error: Nothing
+        , sending: false
+        , copied: false
+        }
+    }
+  focusComposer
+
+leaveRoom :: forall m. MonadAff m => (RoomView -> State -> State) -> App m Unit
+leaveRoom next = withRoom \r -> do
+  H.unsubscribe r.feed
+  H.unsubscribe r.ticker
+  H.modify_ $ next r
+
+onSignal :: forall m. MonadAff m => Signal (Variant RoomEvents) -> App m Unit
+onSignal = case _ of
+  Opened -> inRoom _ { online = true, error = Nothing } *> reload
+  Closed -> inRoom _ { online = false }
+  Garbled why -> inRoom _ { error = Just $ "Unreadable event: " <> why }
+  Delivered event -> event # match
+    { message: onMessage
+    , updated: \m -> inRoom \r -> r { messages = Map.insert m.id m r.messages }
+    , joined: \_ -> reload
+    , left: \name -> inRoom (\r -> r { typing = Map.delete name r.typing }) *> reload
+    , typing: \name -> do
+        { author } <- H.get
+        at <- liftEffect nowMs
+        when (name /= author) $ inRoom \r -> r { typing = Map.insert name at r.typing }
+    }
+
+-- | Show a new message; stay pinned to the bottom if we were; announce
+-- | others' messages.
+onMessage :: forall m. MonadAff m => Message -> App m Unit
+onMessage m = do
+  pinned <- withMessages nearBottom
+  inRoom \r -> r { messages = Map.insert m.id m r.messages, typing = Map.delete m.author r.typing }
+  { author } <- H.get
+  when (fromMaybe true pinned || m.author == author) $ void $ withMessages scrollToEnd
+  when (m.author /= author) $ announce m (author `elem` m.mentions)
+
+-- | A desktop notification and a tab-title count, only while the user is away;
+-- | a mention notifies even when the tab is visible but unfocused.
+announce :: forall m. MonadAff m => Message -> Boolean -> App m Unit
+announce m mentioned = do
+  gone <- liftEffect away
+  when (gone || mentioned) do
+    inRoom \r -> r { unread = r.unread + 1 }
     st <- H.get
-    case st.view of
-      InRoom r -> do
-        outcome <- liftAff $ Rpc.run $ r.room.react { id, emoji, by: st.author }
-        case outcome of
-          Right m -> inRoom \v -> v { messages = Map.insert m.id m v.messages }
-          Left failure -> inRoom _ { error = Just $ Chat.describeFailure failure }
-      _ -> pure unit
+    withRoom \r -> liftEffect do
+      when gone $ setTitle $ "(" <> show r.unread <> ") Chat"
+      when (st.notifications == "granted") $ notify
+        { title: (if mentioned then "@" <> st.author <> " · " else "") <> m.author
+        , body: String.take 200 (Markdown.plain m.text)
+        , tag: "room-" <> Chat.printRoomId r.id
+        }
 
-  Submit event -> do
-    liftEffect $ preventDefault event
-    st <- H.get
-    case st.view of
-      InRoom r | not (null (trim r.draft) && r.attachments == []) -> do
-        inRoom _ { sending = true, error = Nothing }
-        outcome <- liftAff $ Rpc.run $ r.room.post { author: st.author, text: r.draft, images: r.attachments, replyTo: r.replyTo }
-        inRoom case outcome of
-          Right _ -> _ { sending = false, draft = "", attachments = [], replyTo = Nothing }
-          Left failure -> _ { sending = false, error = Just $ Chat.describeFailure failure }
-        focusComposer
-      _ -> pure unit
+-- | History and members from the object; run on open and on presence changes.
+reload :: forall m. MonadAff m => App m Unit
+reload = withRoom \r -> do
+  outcome <- liftAff $ Rpc.run do
+    messages <- Rpc.infallible $ r.room.history unit
+    members <- r.room.members unit
+    pure { messages, members }
+  either (\failure -> inRoom _ { error = Just $ Chat.describeFailure failure }) (handleAction <<< Loaded) outcome
 
-  CopyLink -> do
-    st <- H.get
-    case st.view of
-      InRoom r -> liftEffect (copyText r.link) *> inRoom _ { copied = true }
-      _ -> pure unit
+submit :: forall m. MonadAff m => App m Unit
+submit = withRoom \r -> when (sendable r) do
+  { author } <- H.get
+  inRoom _ { sending = true, error = Nothing }
+  outcome <- liftAff $ Rpc.run $ r.room.post { author, text: r.draft, images: r.attachments, replyTo: r.replyTo }
+  inRoom case outcome of
+    Right _ -> _ { sending = false, draft = "", attachments = [], replyTo = Nothing }
+    Left failure -> _ { sending = false, error = Just $ Chat.describeFailure failure }
+  focusComposer
 
-  Leave -> do
-    liftEffect $ Location.setHash "" =<< location
-    leaveRoom \_ st -> st { view = Lobby { busy: false } }
-  where
-  inRoom f = H.modify_ \st -> case st.view of
-    InRoom r -> st { view = InRoom (f r) }
-    _ -> st
+-- | Tell the room we are typing, at most once per `typingThrottle`.
+pingTyping :: forall m. MonadAff m => App m Unit
+pingTyping = withRoom \r -> unless (null (trim r.draft)) do
+  at <- liftEffect nowMs
+  when (at - r.typingSentAt > typingThrottle) do
+    inRoom _ { typingSentAt = at }
+    { author } <- H.get
+    void $ liftAff $ Rpc.run $ r.room.typing author
 
-  -- History and members from the object; run on open and on presence changes.
-  reload = do
-    st <- H.get
-    case st.view of
-      InRoom r -> do
-        outcome <- liftAff $ Rpc.run do
-          messages <- Rpc.infallible $ r.room.history unit
-          members <- r.room.members unit
-          pure { messages, members }
-        case outcome of
-          Right loaded -> handleAction $ Loaded loaded
-          Left failure -> inRoom _ { error = Just $ Chat.describeFailure failure }
-      _ -> pure unit
+-- | Run an upload, then attach what came back.
+upload :: forall m. MonadAff m => Effect (Promise (Array Int)) -> App m Unit
+upload go = do
+  inRoom _ { uploading = true, error = Nothing }
+  liftAff (attempt $ toAffE go) >>= either
+    (\err -> inRoom _ { uploading = false, error = Just $ "Upload failed: " <> message err })
+    (handleAction <<< Attached)
 
-  leaveRoom next = do
-    st <- H.get
-    case st.view of
-      InRoom r -> do
-        H.unsubscribe r.feed
-        H.unsubscribe r.ticker
-        H.put $ next r st
-      _ -> pure unit
+enterFromUrl :: forall m. MonadAff m => App m Unit
+enterFromUrl = do
+  fragment <- liftEffect $ drop 1 <$> (Location.hash =<< location)
+  traverse_ (handleAction <<< Enter) $ Chat.parseRoomId chat fragment
 
-  focusComposer = H.getHTMLElementRef composerRef >>= traverse_ (liftEffect <<< focus)
+focusComposer :: forall m. MonadAff m => App m Unit
+focusComposer = H.getHTMLElementRef composerRef >>= traverse_ (liftEffect <<< focus)
 
-  -- Run an upload, then attach what came back.
-  uploadWith :: Effect (Promise (Array Int)) -> H.HalogenM State Action () output m Unit
-  uploadWith go = do
-    inRoom _ { uploading = true, error = Nothing }
-    outcome <- liftAff $ attempt $ toAffE go
-    case outcome of
-      Right ids -> handleAction $ Attached ids
-      Left err -> inRoom _ { uploading = false, error = Just $ "Upload failed: " <> message err }
+withMessages :: forall a m. MonadAff m => (HTMLElement -> Effect a) -> App m (Maybe a)
+withMessages act = H.getHTMLElementRef messagesRef >>= traverse (liftEffect <<< act)
 
-  nowMs = unwrap <<< unInstant <$> now
+nowMs :: Effect Number
+nowMs = unwrap <<< unInstant <$> now
 
-  -- A desktop notification and a tab-title count, only while the user is away;
-  -- a mention notifies even when the tab is visible but unfocused.
-  announce m mentioned = do
-    gone <- liftEffect away
-    when (gone || mentioned) do
-      inRoom \r -> r { unread = r.unread + 1 }
-      st <- H.get
-      case st.view of
-        InRoom r -> liftEffect do
-          when gone $ setTitle $ "(" <> show r.unread <> ") Chat"
-          when (st.notifications == "granted") $
-            notify { title: (if mentioned then "@" <> st.author <> " · " else "") <> m.author, body: String.take 200 (Markdown.plain m.text), tag: "room-" <> Chat.printRoomId r.id }
-        _ -> pure unit
+location :: Effect Location.Location
+location = Window.location =<< window
 
-  enterFromUrl = do
-    fragment <- liftEffect $ drop 1 <$> (Location.hash =<< location)
-    case Chat.parseRoomId chat fragment of
-      Just id -> handleAction $ Enter id
-      Nothing -> pure unit
+localStorage :: Effect Storage.Storage
+localStorage = Window.localStorage =<< window
 
-  location = Window.location =<< window
-  localStorage = Window.localStorage =<< window
-  authorKey = "chat.author"
-
-withMessages
-  :: forall a output m
-   . MonadAff m
-  => (HTMLElement -> Effect a)
-  -> H.HalogenM State Action () output m (Maybe a)
-withMessages act = H.getHTMLElementRef messagesRef >>= case _ of
-  Just element -> Just <$> liftEffect (act element)
-  Nothing -> pure Nothing
+authorKey :: String
+authorKey = "chat.author"
 
 byId :: Array Message -> Map Int Message
 byId = Map.fromFoldable <<< map \m -> Tuple m.id m

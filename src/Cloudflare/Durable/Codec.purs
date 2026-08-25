@@ -10,7 +10,7 @@ import Prelude
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Compat as Compat
-import Data.Maybe (Maybe)
+import Data.Maybe (Maybe(..))
 import Data.Symbol (class IsSymbol)
 import Prim.Row as Row
 import Prim.RowList (class RowToList, RowList, Cons, Nil)
@@ -33,6 +33,11 @@ instance hasCodecBoolean :: HasCodec Boolean where
 
 instance hasCodecUnit :: HasCodec Unit where
   codec = CA.null
+
+-- | Nothing to encode, nothing decodes: the error type of a method that
+-- | cannot fail.
+instance hasCodecVoid :: HasCodec Void where
+  codec = CA.prismaticCodec "Void" (const Nothing) absurd CA.json
 
 instance hasCodecArray :: HasCodec a => HasCodec (Array a) where
   codec = CA.array codec

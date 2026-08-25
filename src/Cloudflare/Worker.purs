@@ -124,14 +124,13 @@ ref = WorkerRef
 scriptName :: WorkerRef -> String
 scriptName (WorkerRef name) = name
 
+-- | Routes that know what they need bound. `a <> b` binds what both bind
+-- | and tries `a`'s routes first; the monoid is `Route`'s, lifted through
+-- | `WorkerInit`.
 newtype Worker = Worker (WorkerInit Route)
 
--- | `a <> b` binds what both bind and tries `a`'s routes first.
-instance semigroupWorker :: Semigroup Worker where
-  append (Worker a) (Worker b) = Worker $ lift2 append a b
-
-instance monoidWorker :: Monoid Worker where
-  mempty = Worker $ pure mempty
+derive newtype instance semigroupWorker :: Semigroup Worker
+derive newtype instance monoidWorker :: Monoid Worker
 
 make :: WorkerInit Route -> Worker
 make = Worker
@@ -182,10 +181,10 @@ wranglerConfig options worker = J.fromObject $ Object.fromFoldable $
   , "compatibility_date" /\ J.fromString options.compatibilityDate
   , "durable_objects" /\ J.fromObject (Object.singleton "bindings" (J.fromArray (bindingJson <$> objects)))
   , "exports" /\ J.fromObject (Object.fromFoldable (exportJson <$> hosted))
-  ] <> (if Array.null containers then [] else [ "containers" /\ J.fromArray (containerJson <$> containers) ])
-    <> case options.assets of
-    Just directory -> [ "assets" /\ J.fromObject (Object.singleton "directory" (J.fromString directory)) ]
-    Nothing -> []
+  ] <> Array.catMaybes
+    [ "containers" /\ J.fromArray (containerJson <$> containers) <$ Array.head containers
+    , options.assets <#> \directory -> "assets" /\ J.fromObject (Object.singleton "directory" (J.fromString directory))
+    ]
   where
   objects = Array.nubEq (plan worker).objects
   hosted = objects # Array.filter (\o -> o.scriptName == Nothing)

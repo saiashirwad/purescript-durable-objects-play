@@ -31,7 +31,7 @@ import Data.Array (head)
 import Data.Codec.Argonaut (JsonCodec, JsonDecodeError(..))
 import Data.Codec.Argonaut as CA
 import Data.Divisible (conquer)
-import Data.Either (Either(..), note)
+import Data.Either (Either, either, note)
 import Data.Functor.Contravariant (cmap)
 import Data.Maybe (Maybe)
 import Data.Op (Op(..))
@@ -87,12 +87,10 @@ query :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m (Array
 query (State s) (Statement { sql, params: Op encode, row: Decoder decode }) input = liftRuntime do
   let operation = "sql " <> show sql
   rows <- platform operation $ s.sql sql (encode input)
-  case traverse (runReaderT decode) rows of
-    Right values -> pure values
-    Left err -> platformError operation $ CA.printJsonDecodeError err
+  either (platformError operation <<< CA.printJsonDecodeError) pure $ traverse (runReaderT decode) rows
 
 first :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m (Maybe o)
-first state stmt input = head <$> query state stmt input
+first state stmt = map head <<< query state stmt
 
 execute :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m Unit
-execute state stmt input = void $ query state stmt input
+execute state stmt = void <<< query state stmt
