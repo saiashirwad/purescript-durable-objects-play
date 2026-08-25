@@ -1,7 +1,6 @@
 # durable-mini
 
-Cloudflare Durable Objects in PureScript. Declare an object once; the
-implementation and every client stub share the same record type.
+Cloudflare Durable Objects in PureScript.
 
 ```purescript
 type CounterApi =
