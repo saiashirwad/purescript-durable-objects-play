@@ -9,7 +9,7 @@ import Prelude
 
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
-import Data.Codec.Argonaut.Common as CAC
+import Data.Codec.Argonaut.Compat as Compat
 import Data.Maybe (Maybe)
 import Data.Symbol (class IsSymbol)
 import Prim.Row as Row
@@ -37,8 +37,9 @@ instance hasCodecUnit :: HasCodec Unit where
 instance hasCodecArray :: HasCodec a => HasCodec (Array a) where
   codec = CA.array codec
 
+-- | `Nothing` is `null` on the wire, so hand-written clients can send it.
 instance hasCodecMaybe :: HasCodec a => HasCodec (Maybe a) where
-  codec = CAC.maybe codec
+  codec = Compat.maybe codec
 
 instance hasCodecRecord :: (RowToList r list, HasFieldCodecs list r) => HasCodec (Record r) where
   codec = CA.object "Record" $ fieldCodecs (Proxy :: Proxy list)

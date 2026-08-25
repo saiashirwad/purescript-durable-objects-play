@@ -7,6 +7,7 @@ module Chat.Markdown
   , inlines
   , mentions
   , parse
+  , plain
   ) where
 
 import Prelude
@@ -73,6 +74,24 @@ mentions = nub <<< concatMap fromBlock <<< parse
     Bold xs -> fromInlines xs
     Italic xs -> fromInlines xs
     _ -> []
+
+-- | The text alone, for previews and notifications.
+plain :: String -> String
+plain = joinWith " " <<< map blockText <<< parse
+  where
+  blockText = case _ of
+    Paragraph xs -> inlineText xs
+    Heading _ xs -> inlineText xs
+    Quote bs -> joinWith " " (blockText <$> bs)
+    Bullets items -> joinWith ", " (inlineText <$> items)
+    Code _ body -> body
+  inlineText = joinWith "" <<< map case _ of
+    Text s -> s
+    Bold xs -> inlineText xs
+    Italic xs -> inlineText xs
+    InlineCode s -> s
+    Link l -> l.text
+    Mention n -> "@" <> n
 
 -- Blocks ---------------------------------------------------------------------
 

@@ -283,7 +283,7 @@ messageItem author r (Tuple continued m) =
     Just parent ->
       [ HH.button [ cls "quote", HE.onClick \_ -> JumpTo parent.id ]
           [ HH.span [ cls "quote-author" ] [ HH.text parent.author ]
-          , HH.span [ cls "quote-text" ] [ HH.text $ String.take 120 parent.text ]
+          , HH.span [ cls "quote-text" ] [ HH.text $ String.take 120 $ Markdown.plain parent.text ]
           ]
       ]
 
@@ -351,7 +351,7 @@ composer author r =
         Just parent ->
           HH.div [ cls "reply-chip" ]
             [ replyIcon
-            , HH.span_ [ HH.text $ "Replying to ", HH.strong_ [ HH.text parent.author ], HH.text $ ": " <> String.take 60 parent.text ]
+            , HH.span_ [ HH.text $ "Replying to ", HH.strong_ [ HH.text parent.author ], HH.text $ ": " <> String.take 60 (Markdown.plain parent.text) ]
             , HH.button [ cls "quiet", HP.title "Cancel", HE.onClick \_ -> Reply Nothing ] [ HH.text "×" ]
             ]
         Nothing -> HH.text ""
@@ -657,7 +657,7 @@ handleAction = case _ of
         InRoom r -> liftEffect do
           when gone $ setTitle $ "(" <> show r.unread <> ") Chat"
           when (st.notifications == "granted") $
-            notify { title: (if mentioned then "@" <> st.author <> " · " else "") <> m.author, body: String.take 200 m.text, tag: "room-" <> Chat.printRoomId r.id }
+            notify { title: (if mentioned then "@" <> st.author <> " · " else "") <> m.author, body: String.take 200 (Markdown.plain m.text), tag: "room-" <> Chat.printRoomId r.id }
         _ -> pure unit
 
   enterFromUrl = do

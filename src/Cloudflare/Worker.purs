@@ -173,7 +173,7 @@ toExport (Worker w) = toExportImpl \env -> do
   pure { fetch: fromAff <<< serve routes }
 
 wranglerConfig
-  :: { name :: String, main :: String, compatibilityDate :: String, assets :: Maybe String }
+  :: { name :: String, main :: String, compatibilityDate :: String, assets :: Maybe String, containers :: Boolean }
   -> Worker
   -> Json
 wranglerConfig options worker = J.fromObject $ Object.fromFoldable $
@@ -190,7 +190,7 @@ wranglerConfig options worker = J.fromObject $ Object.fromFoldable $
   objects = Array.nubEq (plan worker).objects
   hosted = objects # Array.filter (\o -> o.scriptName == Nothing)
 
-  containers = hosted # Array.mapMaybe \o -> { className: o.className, spec: _ } <$> o.container
+  containers = if options.containers then hosted # Array.mapMaybe \o -> { className: o.className, spec: _ } <$> o.container else []
 
   containerJson { className, spec } = J.fromObject $ Object.fromFoldable
     [ "class_name" /\ J.fromString className
