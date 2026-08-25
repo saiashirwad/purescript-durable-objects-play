@@ -2,8 +2,10 @@
 
 Live at [durable-mini.texoport.workers.dev](https://durable-mini.texoport.workers.dev/).
 
+Declare an object once. The implementation, the Worker's stub, and the
+browser's stub all have the same record type.
+
 ```purescript
--- One declaration. The class name is a type.
 type RoomApi =
   ( post    :: NewMessage -> Rpc PostError Message
   , history :: Unit       -> Rpc NoError (Array Message)
@@ -13,52 +15,31 @@ type RoomApi =
 room :: Object "Room" RoomApi
 room = Durable.object { post: method, history: method, since: method }
 
--- In the Worker: a real Durable Object stub.
-rooms <- Durable.host roomLive
-(Durable.get rooms id).post { author, text }
-
--- In the browser: same Record RoomApi, over HTTP.
-rooms = Http.connect "/rpc" room
-(Durable.get rooms id).post { author, text }
-```
-
-Implementing one:
-
-```purescript
-type CounterApi =
-  ( increment :: Unit -> Rpc NoError Int
-  , get :: Unit -> Rpc NoError Int
-  )
-
-counter :: Object "Counter" CounterApi
-counter = Durable.object { increment: method, get: method }
-
-countKey :: Storage.Key Int
-countKey = Storage.key "count"
-
-counterLive :: Live "Counter" CounterApi
-counterLive =
-  Durable.implement counter ado
-    state <- Durable.state
-    in do
-      initial <- Storage.get state countKey
-      count <- liftEffect $ Ref.new $ fromMaybe 0 initial
-      pure
-        { increment: \_ -> do
-            next <- liftEffect $ Ref.modify (_ + 1) count
-            Storage.put state countKey next
-            pure next
-        , get: \_ -> liftEffect $ Ref.read count
-        }
-
+-- In the Worker: host the object, get a real Durable Object stub, call it.
 api :: Worker
 api = Worker.make ado
-  counters <- Durable.host counterLive
+  rooms <- Durable.host roomLive
   in
     { fetch: \_ -> do
-        result <- Rpc.run $ (Durable.getByName counters "user-123").increment unit
-        pure $ Worker.text 200 $ show result
+        id <- Durable.newUniqueId rooms
+        let lobby = Durable.get rooms id
+        result <- Rpc.run do
+          _ <- lobby.post { author: "ann", text: "hello" }
+          _ <- lobby.post { author: "bob", text: "hi ann" }
+          Rpc.infallible $ lobby.history unit
+        pure case result of
+          Right messages -> Worker.text 200 $ show (_.text <$> messages)
+          Left failure -> Worker.text 500 $ show failure
     }
+
+-- In the browser: the same Record RoomApi, over HTTP.
+rooms :: Namespace "Room" RoomApi
+rooms = Http.connect "/rpc" room
+
+say :: String -> String -> Aff (Either (RpcFailure PostError) Message)
+say roomId text = do
+  let lobby = Durable.get rooms (Durable.idFromString rooms roomId)
+  Rpc.run $ lobby.post { author: "carol", text }
 ```
 
 ```sh
