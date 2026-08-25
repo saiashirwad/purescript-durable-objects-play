@@ -48,7 +48,6 @@ type Styles =
   , theirsBubble :: Style
   , mineJoined :: Style
   , theirsJoined :: Style
-  , botBubble :: Style
   , mentionedBubble :: Style
   , author :: Style
   , time :: Style
@@ -274,16 +273,16 @@ styles =
   , bubble: create
       [ "background-color" := var tokens.surface
       , "border" := hairline
-      , "border-radius" := "1.25rem"
+      , "border-radius" := "1.125rem"
       , "box-shadow" := var tokens.shadow
       , "display" := "flex"
       , "flex-direction" := "column"
       , "font-size" := "0.9375rem"
-      , "gap" := "0.2rem"
+      , "gap" := "0.15rem"
       , "line-height" := "1.45"
       , "overflow-wrap" := "anywhere"
-      , "padding-block" := "0.6rem"
-      , "padding-inline" := "0.9rem"
+      , "padding-block" := "0.5rem"
+      , "padding-inline" := "0.8rem"
       ]
   , mineBubble: create
       [ "background-color" := var tokens.accent
@@ -295,7 +294,6 @@ styles =
   , theirsBubble: "border-end-start-radius" := var tokens.radiusSm
   , mineJoined: "border-start-end-radius" := var tokens.radiusSm
   , theirsJoined: "border-start-start-radius" := var tokens.radiusSm
-  , botBubble: "border-color" := "color-mix(in oklab," <> var tokens.accent <> " 45%,transparent)"
   , mentionedBubble: "box-shadow" := "0 0 0 2px color-mix(in oklab," <> var tokens.accent <> " 55%,transparent)," <> var tokens.shadow
   , author: create
       [ "color" := var tokens.textMuted
@@ -305,10 +303,9 @@ styles =
       ]
   , time: create
       [ "align-self" := "flex-end"
-      , "font-size" := "0.6875rem"
+      , "font-size" := "0.65rem"
       , "font-variant-numeric" := "tabular-nums"
-      , "margin-block-start" := "0.1rem"
-      , "opacity" := "0.6"
+      , "opacity" := "0.5"
       ]
   , imageLink: create
       [ "display" := "block"
@@ -379,17 +376,21 @@ styles =
       ]
 
   , quote: create
-      [ "background-color" := var tokens.tint
-      , "border-inline-start" := "3px solid " <> var tokens.accent
-      , "border-radius" := var tokens.radiusSm
-      , "display" := "grid"
+      [ "align-items" := "flex-start"
+      , "background-color" := var tokens.tint
+      , "border-inline-start" := "2px solid " <> var tokens.accent
+      , "border-radius" := "0.5rem"
+      , "display" := "flex"
+      , "flex-direction" := "column"
       , "font-size" := "0.8125rem"
-      , "gap" := "0.05rem"
+      , "gap" := "0"
       , "inline-size" := "100%"
-      , "margin-block-end" := "0.35rem"
+      , "justify-content" := "flex-start"
+      , "line-height" := "1.35"
+      , "margin-block-end" := "0.3rem"
       , "min-block-size" := "0"
-      , "padding-block" := "0.35rem"
-      , "padding-inline" := "0.6rem"
+      , "padding-block" := "0.3rem"
+      , "padding-inline" := "0.55rem"
       , "text-align" := "start"
       ]
   , mineQuote: create
@@ -397,9 +398,13 @@ styles =
       , "border-inline-start-color" := "currentColor"
       , "color" := "inherit"
       ]
-  , quoteAuthor: "font-weight" := "600"
+  , quoteAuthor: create
+      [ "font-size" := "0.75rem"
+      , "font-weight" := "600"
+      ]
   , quoteText: create
       [ "color" := var tokens.textMuted
+      , "max-inline-size" := "100%"
       , "overflow" := "hidden"
       , "text-overflow" := "ellipsis"
       , "white-space" := "nowrap"
@@ -596,7 +601,10 @@ styles =
       [ "block-size" := "1.2rem"
       , "inline-size" := "1.2rem"
       ]
-  , botAvatar: "background" := "linear-gradient(145deg,oklch(82% 0.16 85),oklch(66% 0.2 40))"
+  , botAvatar: create
+      [ "background" := var tokens.accent
+      , "color" := var tokens.accentText
+      ]
   }
 
 hairline :: String

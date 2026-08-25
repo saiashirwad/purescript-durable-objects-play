@@ -339,7 +339,6 @@ messageItem author r (Tuple continued m) =
     , if mine then styles.mineBubble else styles.theirsBubble
     , guard (continued && mine) styles.mineJoined
     , guard (continued && not mine) styles.theirsJoined
-    , guard bot styles.botBubble
     , guard mentioned styles.mentionedBubble
     ]
 
