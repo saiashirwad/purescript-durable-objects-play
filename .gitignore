@@ -19,3 +19,4 @@ node_modules/
 # OS and editors
 .DS_Store
 *.log
+FIELD_GUIDE.md

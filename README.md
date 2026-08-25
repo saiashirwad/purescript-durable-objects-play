@@ -126,31 +126,3 @@ spago test       # same objects, in-memory simulator
 ```
 
 Library in `src/Cloudflare/`, agents in `src/Ai/`, chat in `src/Chat/`, pages in `src/Frontend/`.
-
-## Field guide
-
-Where each idea lives, for reading later.
-
-| Idea | Where |
-| --- | --- |
-| Row types as contracts: methods and events are rows, `Variant events` on the wire | `Cloudflare.Durable.Core`, `Events` |
-| `Product (Const plan) (ReaderT env m)`: an applicative that plans before it runs | `Cloudflare.Static` |
-| A monoid lifted through an applicative (`lift2 append`) | `Static`, `Runtime`, `Worker` |
-| A record of monoids is a monoid (`Launch`, `Plan`) | `Runtime`, `Init` |
-| `Alt` on `MaybeT`: the first source that answers | `Worker.Route`, `Chat.Room.Live.open` |
-| `Contravariant`: `cmap` narrows a channel | `Cloudflare.Durable.Sockets` |
-| `Divisible` / `Decidable` via `Op`: parameters encode contravariantly | `Cloudflare.Durable.Sql` |
-| `Profunctor`: input side contravariant, output side covariant | `Sql.Statement`, `Ai.Agent.Def` |
-| A Kleisli arrow (`Star (ExceptT e m)`) as a `Category`, `Strong`, `Choice` | `Ai.Agent.Agent` |
-| `Bifunctor`: map the error or the value | `Cloudflare.Durable.Rpc` |
-| `Void` as the error of a call that cannot fail; `absurd` lifts it | `Rpc.NoError`, `Rpc.infallible` |
-| `Invariant`: a codec and a schema from one description | `Ai.Schema` |
-| An existential hides a tool's types so a toolkit is an array | `Ai.Tool` |
-| A wire format is two codecs; a provider is data over one; a model is data over a provider | `Ai.Wire.OpenAi`, `Ai.Provider`, `Ai.Catalogue` |
-| `ExceptT` with `except` / `withExceptT`: one straight-line error path | `Ai.Provider.modelWith` |
-| Natural transformations (`m ~> n`) move a model or tool between monads | `Ai.Model.hoist`, `Ai.Tool.hoist`, `Runtime.rethrow` |
-| A `Maybe` with reasons is a monad (`Signal`) | `Cloudflare.Durable.Events` |
-| `MonadRec` / `tailRecM`: loops that cannot blow the stack | `Container.ensure`, `Ai.Agent.mount` |
-| `prismaticCodec`: a codec from a partial isomorphism | `Chat.Room.tagged` |
-| Lenses and prisms compose with `<<<` into one screen's state | `Frontend.Chat` |
-| Left-biased `Map.union`: what we hold wins over a reload | `Frontend.Chat` |
