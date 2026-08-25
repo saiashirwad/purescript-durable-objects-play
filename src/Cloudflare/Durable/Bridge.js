@@ -17,7 +17,7 @@ export const bridgeImpl = (base, methods, activate) => {
     // with the object; its id and tag ride along as the attachment.
     async fetch(request) {
       if (request.headers.get("Upgrade") !== "websocket") {
-        return new Response("expected a websocket upgrade", { status: 426 });
+        return this.handlers.fetch(request)();
       }
       const tag = new URL(request.url).searchParams.get("tag") ?? "";
       const socket = { id: crypto.randomUUID(), tag };

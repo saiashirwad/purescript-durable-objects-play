@@ -1,5 +1,6 @@
 module Cloudflare.Durable.Platform
-  ( namespaceFromBinding
+  ( containerFromContext
+  , namespaceFromBinding
   , socketsFromContext
   , stateFromContext
   , variablesFrom
@@ -8,7 +9,7 @@ module Cloudflare.Durable.Platform
 import Prelude
 
 import Cloudflare.Durable.Core (Id(..), Namespace, Object, namespace)
-import Cloudflare.Durable.Runtime (Listing, RawSockets, Socket, State(..))
+import Cloudflare.Durable.Runtime (Exit(..), Launch(..), Listing, RawContainer, RawSockets, Socket, State(..))
 import Cloudflare.Worker (Request, Response)
 import Control.Promise (Promise, toAffE)
 import Data.Argonaut.Core (Json)
@@ -39,7 +40,32 @@ foreign import sqlExec :: Foreign -> String -> Array Json -> Effect (Array Json)
 foreign import variables :: Foreign -> Array String -> Effect (Object.Object String)
 foreign import call :: Foreign -> { kind :: String, value :: String } -> String -> Json -> Effect (Promise Json)
 foreign import unique :: Foreign -> Effect String
-foreign import upgrade :: Foreign -> { kind :: String, value :: String } -> Request -> Effect (Promise Response)
+foreign import fetchObject :: Foreign -> { kind :: String, value :: String } -> Request -> Effect (Promise Response)
+foreign import containerRunning :: Foreign -> Effect Boolean
+foreign import containerStart :: Foreign -> { env :: Object.Object String, entrypoint :: Nullable (Array String), enableInternet :: Boolean } -> Effect Unit
+foreign import containerProbe :: Foreign -> Int -> Effect (Promise Boolean)
+foreign import containerRequest :: Foreign -> Int -> Request -> Effect (Promise Response)
+foreign import containerSignal :: Foreign -> Int -> Effect Unit
+foreign import containerDestroy :: Foreign -> Effect (Promise Unit)
+foreign import containerExit :: Foreign -> Effect (Promise { code :: Nullable Int, lost :: Nullable String })
+
+containerFromContext :: Foreign -> RawContainer
+containerFromContext ctx =
+  { running: liftEffect $ containerRunning ctx
+  , start: \(Launch launch) -> liftEffect $ containerStart ctx
+      { env: Object.fromFoldable (Map.toUnfoldable launch.env :: Array _)
+      , entrypoint: toNullable $ unwrap launch.entrypoint
+      , enableInternet: unwrap launch.internet
+      }
+  , probe: \port -> toAffE $ containerProbe ctx port
+  , request: \port req -> toAffE $ containerRequest ctx port req
+  , signal: \code -> liftEffect $ containerSignal ctx code
+  , destroy: toAffE $ containerDestroy ctx
+  , exit: toAffE (containerExit ctx) <#> \{ code, lost } -> case toMaybe code, toMaybe lost of
+      Just c, _ -> Exited c
+      _, Just why -> Lost why
+      _, _ -> Exited 0
+  }
 foreign import socketsBroadcast :: Foreign -> Json -> Effect Unit
 foreign import socketsSend :: Foreign -> String -> Json -> Effect Unit
 foreign import socketsConnected :: Foreign -> Effect (Array Socket)
@@ -82,7 +108,7 @@ namespaceFromBinding object ns = namespace object
   { call: \id method request -> toAffE $ call ns (encodeId id) method request
   , unique: liftEffect $ Unique <$> unique ns
   , listen: \_ _ _ -> throwException $ error "listen is for browsers and the simulator; a Worker routes the upgrade with Http.route"
-  , upgrade: \id request -> toAffE $ upgrade ns (encodeId id) request
+  , fetch: \id request -> toAffE $ fetchObject ns (encodeId id) request
   }
   where
   encodeId = case _ of

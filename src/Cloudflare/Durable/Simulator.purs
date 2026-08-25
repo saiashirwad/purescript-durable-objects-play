@@ -6,10 +6,13 @@
 -- | Objects sharing a clock share a timeline.
 module Cloudflare.Durable.Simulator
   ( Clock
+  , Stub
   , advance
   , clock
+  , noContainer
   , simulate
   , simulateOn
+  , simulateWith
   ) where
 
 import Prelude
@@ -17,7 +20,10 @@ import Prelude
 import Cloudflare.Durable.Core (Activated, Id(..), Listener, Live, Namespace, activate, namespace)
 import Cloudflare.Durable.Core as Core
 import Cloudflare.Durable.Events (Signal(..))
-import Cloudflare.Durable.Runtime (Socket, State(..))
+import Cloudflare.Durable.Runtime (Exit(..), Launch, Socket, State(..))
+import Cloudflare.Worker (Request, Response)
+import Control.Monad.Rec.Class (Step(..), tailRecM)
+import Data.Time.Duration (Milliseconds(..))
 import Data.Argonaut.Core (Json)
 import Data.Array (filter, reverse, take)
 import Data.Array as Array
@@ -27,10 +33,9 @@ import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String (Pattern(..), stripPrefix)
-import Data.Time.Duration (Milliseconds)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Aff (Aff, error, launchAff_, throwError)
+import Effect.Aff (Aff, delay, error, launchAff_, throwError)
 import Effect.Class (liftEffect)
 import Effect.Now (now)
 import Effect.Ref (Ref)
@@ -67,14 +72,27 @@ advance (Clock c) delta = do
 simulate :: forall name api events. Live name api events -> Aff (Namespace name api events)
 simulate live = clock >>= \c -> simulateOn c live
 
+-- | A stand-in for the container image: what answers on each port once the
+-- | container is "started". Start and stop only flip a flag.
+type Stub = { serve :: Int -> Request -> Aff Response, launched :: Launch -> Aff Unit }
+
+noContainer :: Stub
+noContainer =
+  { serve: \port _ -> throwError $ error $ "nothing listens on port " <> show port <> "; give the simulator a Stub"
+  , launched: \_ -> pure unit
+  }
+
+simulateOn :: forall name api events. Clock -> Live name api events -> Aff (Namespace name api events)
+simulateOn = simulateWith noContainer
+
 type Instance =
   { activated :: Activated
   , alarm :: Ref (Maybe Instant)
   , sockets :: Ref (Map String { socket :: Socket, deliver :: Listener })
   }
 
-simulateOn :: forall name api events. Clock -> Live name api events -> Aff (Namespace name api events)
-simulateOn (Clock c) live@(Core.Live { object }) = do
+simulateWith :: forall name api events. Stub -> Clock -> Live name api events -> Aff (Namespace name api events)
+simulateWith stub (Clock c) live@(Core.Live { object }) = do
   instances <- liftEffect $ Ref.new Map.empty
   counter <- liftEffect $ Ref.new 0
   let
@@ -113,15 +131,37 @@ simulateOn (Clock c) live@(Core.Live { object }) = do
           , send: \socket json -> liftEffect $ Ref.read sockets >>= Map.lookup socket.id >>> traverse_ \{ deliver } -> deliver (Delivered json)
           , connected: liftEffect $ map _.socket <<< Map.values >>> Array.fromFoldable <$> Ref.read sockets
           }
-      pure { state, raw, alarm, sockets }
+      up <- Ref.new false
+      exited <- Ref.new Nothing
+      let
+        halt code = liftEffect do
+          Ref.write false up
+          Ref.write (Just (Exited code)) exited
+        box =
+          { running: liftEffect $ Ref.read up
+          , start: \launch -> do
+              liftEffect $ Ref.write true up
+              liftEffect $ Ref.write Nothing exited
+              stub.launched launch
+          , probe: \_ -> liftEffect $ Ref.read up
+          , request: \port req -> do
+              alive <- liftEffect $ Ref.read up
+              if alive then stub.serve port req else throwError $ error "container port not listening"
+          , signal: \code -> halt (128 + code)
+          , destroy: halt 137
+          , exit: tailRecM (\_ -> liftEffect (Ref.read exited) >>= case _ of
+              Just outcome -> pure $ Done outcome
+              Nothing -> delay (Milliseconds 20.0) $> Loop unit) unit
+          }
+      pure { state, raw, box, alarm, sockets }
 
     instanceFor id = do
       existing <- liftEffect $ Map.lookup id <$> Ref.read instances
       case existing of
         Just found -> pure found
         Nothing -> do
-          { state, raw, alarm, sockets } <- fresh
-          activated <- activate live { state, variables: Map.empty, sockets: raw }
+          { state, raw, box, alarm, sockets } <- fresh
+          activated <- activate live { state, variables: Map.empty, sockets: raw, container: box }
           let created = { activated, alarm, sockets }
           liftEffect $ Ref.modify_ (Map.insert id created) instances
           pure created
@@ -150,7 +190,9 @@ simulateOn (Clock c) live@(Core.Live { object }) = do
         liftEffect $ deliver Closed
         activated.disconnect socket
 
-    upgrade _ _ = throwError $ error "the simulator has no HTTP; use listen"
+    fetch id request = do
+      { activated } <- instanceFor id
+      activated.fetch request
 
     wake at = do
       all <- liftEffect $ Map.values <$> Ref.read instances
@@ -161,6 +203,6 @@ simulateOn (Clock c) live@(Core.Live { object }) = do
           activated.alarm
 
   liftEffect $ Ref.modify_ (_ <> [ wake ]) c.wakers
-  pure $ namespace object { call, unique, listen, upgrade }
+  pure $ namespace object { call, unique, listen, fetch }
   where
   hasPrefix p key = p == "" || stripPrefix (Pattern p) key /= Nothing

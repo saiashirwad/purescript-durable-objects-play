@@ -44,9 +44,8 @@ roomLive =
           joined = cmap (inj (Proxy :: Proxy "joined")) sockets :: Sockets String
           left = cmap (inj (Proxy :: Proxy "left")) sockets :: Sockets String
           typing = cmap (inj (Proxy :: Proxy "typing")) sockets :: Sockets String
-        pure
-          { methods:
-              { post: \new -> do
+        pure $ Durable.handlers
+          { post: \new -> do
                   let author = trim new.author
                   let text = trim new.text
                   when (author == "") $ fail AuthorRequired
@@ -60,11 +59,11 @@ roomLive =
                   liftEffect $ Ref.write kept messages
                   Sockets.broadcast posted message
                   pure message
-              , history: \_ -> liftEffect $ Ref.read messages
-              , members: \_ -> nub <<< map _.tag <$> Sockets.connected sockets
-              , typing: Sockets.broadcast typing
-              }
-          , alarm: mempty
-          , connect: \socket -> Sockets.broadcast joined socket.tag
-          , disconnect: \socket -> Sockets.broadcast left socket.tag
+          , history: \_ -> liftEffect $ Ref.read messages
+          , members: \_ -> nub <<< map _.tag <$> Sockets.connected sockets
+          , typing: Sockets.broadcast typing
           }
+          # _
+            { connect = \socket -> Sockets.broadcast joined socket.tag
+            , disconnect = \socket -> Sockets.broadcast left socket.tag
+            }

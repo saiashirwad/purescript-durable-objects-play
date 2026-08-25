@@ -3,6 +3,8 @@
 -- | `POST <prefix>/<class>/new` returns `{ "id": "<hex>" }`.
 -- | `GET <prefix>/<class>/id/<hex>/socket?tag=<tag>` upgrades to a WebSocket
 -- | that receives the object's events.
+-- | `<prefix>/<class>/id/<hex>/http/<path>` reaches the object's `fetch` hook
+-- | as `/<path>`; a container proxies it.
 -- | No authentication: put `route` behind your own.
 module Cloudflare.Durable.Http
   ( connect
@@ -23,7 +25,8 @@ import Cloudflare.Worker as Worker
 import Control.Promise (Promise, toAffE)
 import Data.Argonaut.Core (Json)
 import Data.Maybe (Maybe(..))
-import Data.String (Pattern(..), split, stripPrefix)
+import Data.Array (drop, take)
+import Data.String (Pattern(..), joinWith, split, stripPrefix)
 import Effect (Effect)
 import Effect.Aff (error, throwError)
 
@@ -39,7 +42,10 @@ route prefix (Namespace ns) = Worker.route \request ->
       pure $ Just $ Worker.json 200 envelope
     "GET", Just [ klass, kind, value, "socket" ]
       | klass == ns.name, Just id <- decodeId kind value, Worker.header request "upgrade" == Just "websocket" ->
-          Just <$> ns.upgrade id request
+          Just <$> ns.fetch id request
+    _, Just segments
+      | [ klass, kind, value, "http" ] <- take 4 segments, klass == ns.name, Just id <- decodeId kind value ->
+          Just <$> ns.fetch id (Worker.rebase ("/" <> joinWith "/" (drop 4 segments)) request)
     "POST", Just [ klass, "new" ] | klass == ns.name -> do
       id <- ns.unique
       pure $ Just $ Worker.json 200 $ CA.encode idCodec { id: idToString' id }
@@ -56,7 +62,7 @@ connect prefix object = namespace object
   { call: \id methodName body -> toAffE $ postJson (url id methodName) body
   , listen: \id tag (deliver :: Listener) ->
       openSocket (url id "socket?tag=" <> tag) (deliver Opened) (deliver Closed) (deliver <<< Delivered) (deliver <<< Garbled)
-  , upgrade: \_ _ -> throwError $ error "upgrade is for Workers; a browser listens"
+  , fetch: \_ _ -> throwError $ error "fetch into an object is for Workers; a browser goes through Http.route"
   , unique: do
       response <- toAffE $ postJson (base <> "/new") J.jsonNull
       case CA.decode idCodec response of

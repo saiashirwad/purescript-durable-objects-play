@@ -2,6 +2,7 @@ module Example.Api
   ( api
   , chat
   , counter
+  , echo
   ) where
 
 import Prelude
@@ -17,14 +18,21 @@ import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), split)
 import Example.Counter (CounterApi, counterLive)
+import Example.Echo (echoLive)
 
 api :: Worker
-api = chat <> counter
+api = chat <> counter <> echo
 
 chat :: Worker
 chat = Worker.make ado
   rooms <- Durable.host roomLive
   in Http.route "/rpc" rooms
+
+-- | `/rpc/Echo/name/<n>/http/<path>` proxies to that name's container.
+echo :: Worker
+echo = Worker.make ado
+  echoes <- Durable.host echoLive
+  in Http.route "/rpc" echoes
 
 counter :: Worker
 counter = Worker.make ado

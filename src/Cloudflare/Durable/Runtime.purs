@@ -1,6 +1,9 @@
 module Cloudflare.Durable.Runtime
-  ( Listing
+  ( Exit(..)
+  , Launch(..)
+  , Listing
   , PlatformError(..)
+  , RawContainer
   , RawSockets
   , Runtime
   , Socket
@@ -24,6 +27,11 @@ import Data.DateTime.Instant (Instant)
 import Data.Either (Either)
 import Data.Maybe (Maybe)
 import Data.Tuple (Tuple)
+import Cloudflare.Worker (Request, Response)
+import Data.Map (Map)
+import Data.Map as Map
+import Data.Maybe.Last (Last)
+import Data.Monoid.Conj (Conj)
 import Effect.Aff (Aff, attempt, message)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
@@ -65,6 +73,49 @@ type RawSockets =
   { broadcast :: Json -> Aff Unit
   , send :: Socket -> Json -> Aff Unit
   , connected :: Aff (Array Socket)
+  }
+
+-- | How to start a container. A monoid: `env` unions, the last `entrypoint`
+-- | wins, internet stays on unless someone turns it off. `mempty` is the
+-- | image's own defaults.
+newtype Launch = Launch
+  { env :: Map String String
+  , entrypoint :: Last (Array String)
+  , internet :: Conj Boolean
+  }
+
+instance semigroupLaunch :: Semigroup Launch where
+  append (Launch a) (Launch b) = Launch
+    { env: Map.union b.env a.env
+    , entrypoint: a.entrypoint <> b.entrypoint
+    , internet: a.internet <> b.internet
+    }
+
+instance monoidLaunch :: Monoid Launch where
+  mempty = Launch { env: Map.empty, entrypoint: mempty, internet: mempty }
+
+-- | How a container run ended.
+data Exit
+  = Exited Int
+  | Lost String
+
+derive instance eqExit :: Eq Exit
+
+instance showExit :: Show Exit where
+  show = case _ of
+    Exited code -> "(Exited " <> show code <> ")"
+    Lost why -> "(Lost " <> show why <> ")"
+
+-- | The untyped container surface a backend provides. `probe` is true once
+-- | something listens on the port.
+type RawContainer =
+  { running :: Aff Boolean
+  , start :: Launch -> Aff Unit
+  , probe :: Int -> Aff Boolean
+  , request :: Int -> Request -> Aff Response
+  , signal :: Int -> Aff Unit
+  , destroy :: Aff Unit
+  , exit :: Aff Exit
   }
 
 newtype Runtime a = Runtime (ExceptT PlatformError Aff a)

@@ -28,6 +28,7 @@ import Effect.Now (now)
 import Data.DateTime.Instant (unInstant)
 import Data.Newtype (unwrap)
 import Halogen.Subscription (makeEmitter)
+import Control.Promise (Promise, toAffE)
 import Halogen as H
 import Halogen.Aff as HA
 import Halogen.HTML as HH
@@ -46,12 +47,18 @@ foreign import nearBottom :: HTMLElement -> Effect Boolean
 foreign import scrollToEnd :: HTMLElement -> Effect Unit
 foreign import copyText :: String -> Effect Unit
 foreign import interval :: Int -> (Unit -> Effect Unit) -> Effect (Effect Unit)
+foreign import notificationPermission :: Effect String
+foreign import requestNotifications :: Effect (Promise String)
+foreign import away :: Effect Boolean
+foreign import notify :: { title :: String, body :: String, tag :: String } -> Effect Unit
+foreign import setTitle :: String -> Effect Unit
 
 chat :: Chat
 chat = Chat.connect "/rpc"
 
 type State =
   { author :: String
+  , notifications :: String -- "default" | "granted" | "denied" | "unsupported"
   , view :: View
   }
 
@@ -72,6 +79,7 @@ type RoomView =
   , members :: Array String
   , typing :: Map String Number
   , typingSentAt :: Number
+  , unread :: Int
   , error :: Maybe String
   , sending :: Boolean
   , copied :: Boolean
@@ -90,6 +98,7 @@ data Action
   | Notified (Signal (Variant RoomEvents))
   | Loaded { messages :: Array Message, members :: Array String }
   | Tick
+  | EnableNotifications
   | CopyLink
   | Leave
 
@@ -100,7 +109,7 @@ main = HA.runHalogenAff do
 
 page :: forall query input output m. MonadAff m => H.Component query input output m
 page = H.mkComponent
-  { initialState: \_ -> { author: "", view: Lobby { busy: false } }
+  { initialState: \_ -> { author: "", notifications: "default", view: Lobby { busy: false } }
   , render
   , eval: H.mkEval H.defaultEval
       { handleAction = handleAction
@@ -117,7 +126,7 @@ render :: forall m. State -> Html m
 render st = case st.view of
   Lobby lobby -> lobbyView lobby
   Joining joining -> joiningView joining
-  InRoom r -> roomView st.author r
+  InRoom r -> roomView st r
 
 lobbyView :: forall m. { busy :: Boolean } -> Html m
 lobbyView { busy } =
@@ -150,16 +159,16 @@ joiningView { name } =
         ]
     ]
 
-roomView :: forall m. String -> RoomView -> Html m
-roomView author r =
+roomView :: forall m. State -> RoomView -> Html m
+roomView st r =
   HH.main [ cls "room" ]
-    [ roomHeader author r
-    , messageList author r
+    [ roomHeader st r
+    , messageList st.author r
     , composer r
     ]
 
-roomHeader :: forall m. String -> RoomView -> Html m
-roomHeader author r =
+roomHeader :: forall m. State -> RoomView -> Html m
+roomHeader { author, notifications } r =
   HH.header_
     [ HH.div [ cls "room-title" ]
         [ HH.span [ cls if r.online then "dot online" else "dot" ] []
@@ -168,6 +177,9 @@ roomHeader author r =
         , HH.span [ cls "hint online-count" ] [ HH.text $ onlineLabel r ]
         , HH.button [ cls "chip", HE.onClick \_ -> CopyLink ]
             [ linkIcon, HH.text if r.copied then "Copied" else "Copy link" ]
+        , if notifications == "default" then
+            HH.button [ cls "chip", HE.onClick \_ -> EnableNotifications ] [ bellIcon, HH.text "Notify me" ]
+          else HH.text ""
         ]
     , HH.div [ cls "room-actions" ]
         [ HH.div [ cls "members", HP.title (String.joinWith ", " r.members) ] (avatar <$> r.members)
@@ -266,6 +278,11 @@ linkIcon = HH.elementNS svgNs (HH.ElemName "svg")
   , path "M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"
   ]
 
+bellIcon :: forall w i. HH.HTML w i
+bellIcon = HH.elementNS svgNs (HH.ElemName "svg")
+  [ HP.attr (HH.AttrName "viewBox") "0 0 24 24", HP.attr (HH.AttrName "aria-hidden") "true" ]
+  [ path "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", path "M10.3 21a1.94 1.94 0 0 0 3.4 0" ]
+
 sendIcon :: forall w i. HH.HTML w i
 sendIcon = HH.elementNS svgNs (HH.ElemName "svg")
   [ HP.attr (HH.AttrName "viewBox") "0 0 24 24", HP.attr (HH.AttrName "aria-hidden") "true" ]
@@ -293,7 +310,8 @@ handleAction :: forall output m. MonadAff m => Action -> H.HalogenM State Action
 handleAction = case _ of
   Initialize -> do
     author <- liftEffect $ fromMaybe "" <$> (Storage.getItem authorKey =<< localStorage)
-    H.modify_ _ { author = author }
+    notifications <- liftEffect notificationPermission
+    H.modify_ _ { author = author, notifications = notifications }
     fragment <- liftEffect $ drop 1 <$> (Location.hash =<< location)
     case Chat.parseRoomId chat fragment of
       Just id -> handleAction $ Enter id
@@ -344,6 +362,7 @@ handleAction = case _ of
           , typing: Map.empty
           , typingSentAt: 0.0
           , error: Nothing
+          , unread: 0
           , sending: false
           , copied: false
           }
@@ -364,6 +383,7 @@ handleAction = case _ of
           inRoom \r -> r { messages = Map.insert message.id message r.messages, typing = Map.delete message.author r.typing }
           { author } <- H.get
           when (fromMaybe true pinned || message.author == author) $ void $ withMessages scrollToEnd
+          when (message.author /= author) $ announce message
       , joined: \_ -> reload
       , left: \name -> do
           inRoom \r -> r { typing = Map.delete name r.typing }
@@ -374,10 +394,16 @@ handleAction = case _ of
           when (name /= author) $ inRoom \r -> r { typing = Map.insert name at r.typing }
       }
 
-  -- Forget anyone who has not typed for a few seconds.
+  -- Forget anyone who has not typed for a few seconds; clear unread once seen.
   Tick -> do
     at <- liftEffect nowMs
     inRoom \r -> r { typing = Map.filter (\seen -> at - seen < typingTtl) r.typing }
+    here <- liftEffect $ not <$> away
+    when here $ inRoom _ { unread = 0 } *> liftEffect (setTitle "Chat")
+
+  EnableNotifications -> do
+    outcome <- liftAff $ toAffE requestNotifications
+    H.modify_ _ { notifications = outcome }
 
   Loaded { messages, members } -> do
     -- Left-biased union: what we already hold wins over the reload.
@@ -449,6 +475,19 @@ handleAction = case _ of
   focusComposer = H.getHTMLElementRef composerRef >>= traverse_ (liftEffect <<< focus)
 
   nowMs = unwrap <<< unInstant <$> now
+
+  -- A desktop notification and a tab-title count, only while the user is away.
+  announce message = do
+    gone <- liftEffect away
+    when gone do
+      inRoom \r -> r { unread = r.unread + 1 }
+      st <- H.get
+      case st.view of
+        InRoom r -> liftEffect do
+          setTitle $ "(" <> show r.unread <> ") Chat"
+          when (st.notifications == "granted") $
+            notify { title: message.author, body: message.text, tag: "room-" <> Chat.printRoomId r.id }
+        _ -> pure unit
 
   location = Window.location =<< window
   localStorage = Window.localStorage =<< window

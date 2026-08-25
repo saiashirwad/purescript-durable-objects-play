@@ -42,21 +42,19 @@ reminderLive =
   Durable.implementWith reminder ado
     state <- Durable.state
     in
-      pure
-        { methods:
-            { remind: \{ after, note } -> do
-                Storage.put state noteKey note
-                Alarm.scheduleIn state (Milliseconds after)
-            , pending: \_ -> isJust <$> Alarm.scheduled state
-            , fired: \_ -> fromFoldable <<< Map.values <$> Storage.list state fired
-            , forget: \_ -> Storage.deleteAll state
-            }
-        , connect: mempty
-        , disconnect: mempty
-        , alarm: do
-            note <- Storage.get state noteKey
-            for_ note \text -> do
-              done <- Storage.list state fired
-              Storage.put state (fired `Storage.at` show (Map.size done)) text
-              void $ Storage.delete state noteKey
+      pure $ Durable.handlers
+        { remind: \{ after, note } -> do
+            Storage.put state noteKey note
+            Alarm.scheduleIn state (Milliseconds after)
+        , pending: \_ -> isJust <$> Alarm.scheduled state
+        , fired: \_ -> fromFoldable <<< Map.values <$> Storage.list state fired
+        , forget: \_ -> Storage.deleteAll state
         }
+        # _
+          { alarm = do
+              note <- Storage.get state noteKey
+              for_ note \text -> do
+                done <- Storage.list state fired
+                Storage.put state (fired `Storage.at` show (Map.size done)) text
+                void $ Storage.delete state noteKey
+          }

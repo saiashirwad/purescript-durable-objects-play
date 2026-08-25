@@ -11,9 +11,12 @@ module Cloudflare.Durable.Core
   , Transport
   , activate
   , className
+  , container
   , emitting
   , get
   , getByName
+  , handlers
+  , http
   , idFromName
   , idFromString
   , idToString
@@ -31,7 +34,9 @@ module Cloudflare.Durable.Core
 import Prelude
 
 import Cloudflare.Durable.Events (class DecodeEvents, class EncodeEvents, Signal(..), decodeEvents, encodeEvents, unwire)
-import Cloudflare.Durable.Init (Env, Init)
+import Cloudflare.Durable.Container (Container)
+import Cloudflare.Durable.Container as Container
+import Cloudflare.Durable.Init (Env, Image, Init)
 import Cloudflare.Durable.Init as Init
 import Cloudflare.Durable.Protocol (class Connect, class MethodNames, class Serve, RawCall, RawHandler, connect, methodNames, serve)
 import Cloudflare.Durable.Runtime (Runtime, Socket)
@@ -40,6 +45,8 @@ import Cloudflare.Durable.Sockets (Sockets)
 import Cloudflare.Durable.Sockets as Sockets
 import Cloudflare.Static (static)
 import Cloudflare.Worker (Request, Response)
+import Cloudflare.Worker as Worker
+import Data.Newtype (unwrap)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
 import Data.Codec.Argonaut (JsonDecodeError, printJsonDecodeError)
@@ -124,14 +131,28 @@ loopback (Object o) impl = o.connect \name request ->
     Nothing -> throwError $ error $ o.name <> " has no method " <> show name
 
 -- | What activation yields. `alarm` runs when a scheduled alarm is due;
--- | `connect` and `disconnect` run as sockets come and go. Each is a monoid
--- | whose `mempty` does nothing.
+-- | `connect` and `disconnect` run as sockets come and go; each is a monoid
+-- | whose `mempty` does nothing. `fetch` answers plain HTTP sent to the
+-- | object at `<prefix>/<class>/<id>/http/...`; `noFetch` answers 404.
 type Handlers api =
   { methods :: Record api
   , alarm :: Runtime Unit
   , connect :: Socket -> Runtime Unit
   , disconnect :: Socket -> Runtime Unit
+  , fetch :: Request -> Runtime Response
   }
+
+noFetch :: Request -> Runtime Response
+noFetch _ = pure $ Worker.text 404 "this object serves no HTTP"
+
+-- | Methods with every hook at its default. Override with record update:
+-- | `(handlers methods) { alarm = ..., fetch = ... }`.
+handlers :: forall api. Record api -> Handlers api
+handlers methods = { methods, alarm: mempty, connect: mempty, disconnect: mempty, fetch: noFetch }
+
+-- | The container declared with an `Image`, as a typed handle.
+container :: Image -> Init Container
+container = map Container.fromRaw <<< Init.container
 
 newtype Live :: Symbol -> Row Type -> Row Type -> Type
 newtype Live name api events = Live
@@ -140,7 +161,7 @@ newtype Live name api events = Live
   }
 
 implement :: forall name api events. Object name api events -> Init (Runtime (Record api)) -> Live name api events
-implement o = implementWith o <<< map (map { methods: _, alarm: mempty, connect: mempty, disconnect: mempty })
+implement o = implementWith o <<< map (map handlers)
 
 implementWith :: forall name api events. Object name api events -> Init (Runtime (Handlers api)) -> Live name api events
 implementWith o activation = Live { object: o, activate: activation }
@@ -149,17 +170,20 @@ implementWith o activation = Live { object: o, activate: activation }
 sockets :: forall name api events. Object name api events -> Init (Sockets (Variant events))
 sockets (Object o) = static mempty \env -> pure $ Sockets.fromRaw o.encodeEvent env.sockets
 
-type Manifest = { className :: String, methods :: Array String, variables :: Array String }
+type Manifest = { className :: String, methods :: Array String, variables :: Array String, container :: Maybe Image }
 
 manifest :: forall name api events. Live name api events -> Manifest
 manifest (Live { object: Object o, activate: activation }) =
-  { className: o.name, methods: o.methods, variables: (Init.plan activation).variables }
+  { className: o.name, methods: o.methods, variables: plan.variables, container: unwrap plan.container }
+  where
+  plan = Init.plan activation
 
 type Activated =
   { methods :: Map String RawHandler
   , alarm :: Aff Unit
   , connect :: Socket -> Aff Unit
   , disconnect :: Socket -> Aff Unit
+  , fetch :: Request -> Aff Response
   }
 
 -- | Hooks rethrow a `PlatformError` as an exception so the platform sees it
@@ -168,14 +192,16 @@ activate :: forall name api events. Live name api events -> Env -> Aff Activated
 activate (Live { object: Object o, activate: activation }) env = do
   outcome <- Runtime.run $ join $ Init.build activation env
   case outcome of
-    Right handlers -> pure
-      { methods: o.serve handlers.methods
-      , alarm: rethrow handlers.alarm
-      , connect: rethrow <<< handlers.connect
-      , disconnect: rethrow <<< handlers.disconnect
+    Right active -> pure
+      { methods: o.serve active.methods
+      , alarm: rethrow active.alarm
+      , connect: rethrow <<< active.connect
+      , disconnect: rethrow <<< active.disconnect
+      , fetch: rethrow <<< active.fetch
       }
     Left failure -> throwError $ error $ o.name <> " failed to activate: " <> show failure
   where
+  rethrow :: forall a. Runtime a -> Aff a
   rethrow action = Runtime.run action >>= either (throwError <<< error <<< show) pure
 
 data Id
@@ -199,13 +225,13 @@ derive newtype instance showObjectId :: Show (ObjectId name)
 type Listener = Signal Json -> Effect Unit
 
 -- | How a namespace reaches its objects. `listen` opens a socket as `tag` and
--- | returns the closer; `upgrade` hands a WebSocket upgrade request to the
--- | object (Worker side only).
+-- | returns the closer; `fetch` hands raw HTTP (a WebSocket upgrade, or a
+-- | request for the object's `fetch` hook) to the object, Worker side only.
 type Transport =
   { call :: Id -> RawCall
   , unique :: Aff Id
   , listen :: Id -> String -> Listener -> Effect (Effect Unit)
-  , upgrade :: Id -> Request -> Aff Response
+  , fetch :: Id -> Request -> Aff Response
   }
 
 newtype Namespace :: Symbol -> Row Type -> Row Type -> Type
@@ -215,7 +241,7 @@ newtype Namespace name api events = Namespace
   , call :: Id -> RawCall
   , unique :: Aff Id
   , listen :: Id -> String -> Listener -> Effect (Effect Unit)
-  , upgrade :: Id -> Request -> Aff Response
+  , fetch :: Id -> Request -> Aff Response
   , decodeEvent :: Json -> Either JsonDecodeError (Variant events)
   }
 
@@ -226,7 +252,7 @@ namespace (Object o) transport = Namespace
   , call: transport.call
   , unique: transport.unique
   , listen: transport.listen
-  , upgrade: transport.upgrade
+  , fetch: transport.fetch
   , decodeEvent: o.decodeEvent
   }
 
@@ -250,6 +276,11 @@ listen (Namespace ns) (ObjectId id) tag deliver = ns.listen id tag $ deliver <<<
   Opened -> Opened
   Closed -> Closed
   Garbled m -> Garbled m
+
+-- | Plain HTTP into an object's `fetch` hook. Worker side and simulator;
+-- | a browser reaches it through `Http.route` at `.../http/<path>`.
+http :: forall name api events. Namespace name api events -> ObjectId name -> Request -> Aff Response
+http (Namespace ns) (ObjectId id) = ns.fetch id
 
 idFromName :: forall name api events. Namespace name api events -> String -> ObjectId name
 idFromName _ = ObjectId <<< Named

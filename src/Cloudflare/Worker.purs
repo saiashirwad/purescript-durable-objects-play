@@ -1,5 +1,6 @@
 module Cloudflare.Worker
-  ( ObjectBinding
+  ( ContainerSpec
+  , ObjectBinding
   , Plan
   , Request
   , Response
@@ -15,7 +16,11 @@ module Cloudflare.Worker
   , objectBinding
   , pathname
   , plan
+  , rebase
   , ref
+  , requestTo
+  , responseText
+  , status
   , route
   , scriptName
   , serve
@@ -38,6 +43,7 @@ import Control.Promise (Promise, fromAff, toAffE)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
 import Data.Array as Array
+import Data.Int as Int
 import Data.Tuple.Nested ((/\))
 import Data.Maybe (Maybe(..))
 import Data.Nullable (Nullable, toMaybe)
@@ -55,11 +61,17 @@ foreign import text :: Int -> String -> Response
 foreign import json :: Int -> Json -> Response
 foreign import bodyImpl :: Request -> Effect (Promise Json)
 foreign import headerImpl :: Request -> String -> Nullable String
+foreign import rebase :: String -> Request -> Request
+foreign import requestTo :: String -> Request
+foreign import status :: Response -> Int
+foreign import responseTextImpl :: Response -> Effect (Promise String)
 foreign import variableImpl :: Foreign -> String -> Effect String
 foreign import bindingImpl :: Foreign -> String -> Effect Foreign
 foreign import toExportImpl :: (Foreign -> Effect { fetch :: Request -> Effect (Promise Response) }) -> Foreign
 
-type ObjectBinding = { className :: String, binding :: String, scriptName :: Maybe String }
+type ContainerSpec = { image :: String, instances :: Int, instanceType :: String }
+
+type ObjectBinding = { className :: String, binding :: String, scriptName :: Maybe String, container :: Maybe ContainerSpec }
 
 type Plan = { objects :: Array ObjectBinding, variables :: Array String }
 
@@ -73,6 +85,9 @@ objectBinding b = static { objects: [ b ], variables: [] } \env -> bindingImpl e
 
 body :: Request -> Aff Json
 body = toAffE <<< bodyImpl
+
+responseText :: Response -> Aff String
+responseText = toAffE <<< responseTextImpl
 
 header :: Request -> String -> Maybe String
 header request = toMaybe <<< headerImpl request
@@ -133,12 +148,22 @@ wranglerConfig options worker = J.fromObject $ Object.fromFoldable $
   , "compatibility_date" /\ J.fromString options.compatibilityDate
   , "durable_objects" /\ J.fromObject (Object.singleton "bindings" (J.fromArray (bindingJson <$> objects)))
   , "exports" /\ J.fromObject (Object.fromFoldable (exportJson <$> hosted))
-  ] <> case options.assets of
+  ] <> (if Array.null containers then [] else [ "containers" /\ J.fromArray (containerJson <$> containers) ])
+    <> case options.assets of
     Just directory -> [ "assets" /\ J.fromObject (Object.singleton "directory" (J.fromString directory)) ]
     Nothing -> []
   where
   objects = Array.nubEq (plan worker).objects
   hosted = objects # Array.filter (\o -> o.scriptName == Nothing)
+
+  containers = hosted # Array.mapMaybe \o -> { className: o.className, spec: _ } <$> o.container
+
+  containerJson { className, spec } = J.fromObject $ Object.fromFoldable
+    [ "class_name" /\ J.fromString className
+    , "image" /\ J.fromString spec.image
+    , "max_instances" /\ J.fromNumber (Int.toNumber spec.instances)
+    , "instance_type" /\ J.fromString spec.instanceType
+    ]
 
   bindingJson o = J.fromObject $ Object.fromFoldable $
     [ "name" /\ J.fromString o.binding, "class_name" /\ J.fromString o.className ]

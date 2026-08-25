@@ -18,7 +18,20 @@ export const bindingImpl = (env) => (name) => () => {
 
 export const bodyImpl = (request) => () => request.json();
 
+export const requestTo = (url) => new Request(url);
+
+export const status = (response) => response.status;
+
+export const responseTextImpl = (response) => () => response.text();
+
 export const headerImpl = (request) => (name) => request.headers.get(name);
+
+// The same request at another path, so an object sees `/x` not `/rpc/Class/id/http/x`.
+export const rebase = (path) => (request) => {
+  const url = new URL(request.url);
+  url.pathname = path;
+  return new Request(url, request);
+};
 
 export const url = (request) => request.url;
 export const method = (request) => request.method;

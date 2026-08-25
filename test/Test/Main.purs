@@ -24,6 +24,10 @@ import Effect.Class (liftEffect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
 import Example.Counter (counter, counterLive)
+import Example.Echo (echoLive)
+import Cloudflare.Worker as Worker
+import Cloudflare.Durable.Runtime (Launch(..))
+import Data.Map as Map
 import Test.Journal (journalLive)
 import Test.Ledger (LedgerError(..), ledgerLive)
 import Test.Reminder (reminderLive)
@@ -49,7 +53,7 @@ main = launchAff_ do
     pure $ value == 1
 
   check "the manifest describes the object" $ pure $
-    Durable.manifest counterLive == { className: "Counter", methods: [ "get", "increment" ], variables: [] }
+    Durable.manifest counterLive == { className: "Counter", methods: [ "get", "increment" ], variables: [], container: Nothing }
 
   check "a domain error crosses the wire intact" do
     let account = Durable.getByName ledgers "dave"
@@ -148,6 +152,30 @@ main = launchAff_ do
     pure $ both == [ "first", "second" ] && none == []
 
   journals <- Simulator.simulate journalLive
+
+  launched <- liftEffect $ Ref.new Map.empty
+  echoes <- Simulator.simulateWith
+    { serve: \port request -> pure $ Worker.text 200 $ "port " <> show port <> " got " <> Worker.pathname request
+    , launched: \(Launch l) -> liftEffect $ Ref.write l.env launched
+    }
+    timeline
+    echoLive
+
+  check "a container starts on first request, proxies it, and stops when idle" do
+    let id = Durable.idFromName echoes "box"
+    let stub = Durable.get echoes id
+    before <- Rpc.run $ stub.running unit
+    response <- Durable.http echoes id (Worker.requestTo "http://echo/hello")
+    body <- Worker.responseText response
+    during <- Rpc.run $ stub.running unit
+    env <- liftEffect $ Ref.read launched
+    Simulator.advance timeline (Milliseconds 299000.0)
+    early <- Rpc.run $ stub.running unit
+    Simulator.advance timeline (Milliseconds 2000.0)
+    after <- Rpc.run $ stub.running unit
+    pure $ before == Right false && Worker.status response == 200 && body == "port 8080 got /hello"
+      && during == Right true && Map.lookup "GREETING" env == Just "hello from purescript"
+      && early == Right true && after == Right false
 
   check "sql rows decode through the applicative row" $ succeeds do
     let book = Durable.getByName journals "book"
