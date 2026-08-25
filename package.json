@@ -1,0 +1,16 @@
+{
+  "name": "pureable-objects",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "spago build",
+    "bundle": "spago bundle --module Frontend.Chat --outfile public/chat.js --platform browser --bundle-type app && spago bundle --module Frontend.Counter --outfile public/counter.js --platform browser --bundle-type app",
+    "config": "node scripts/config.mjs",
+    "dev": "npm run build && npm run bundle && npm run config && wrangler dev",
+    "deploy": "npm run build && npm run bundle && npm run config && wrangler deploy",
+    "test": "spago test"
+  },
+  "devDependencies": {
+    "wrangler": "^4.125.0"
+  }
+}

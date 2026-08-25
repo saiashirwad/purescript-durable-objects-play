@@ -1,0 +1,44 @@
+package:
+  name: durable-mini
+  dependencies:
+    - aff
+    - aff-promise
+    - argonaut-core
+    - arrays
+    - avar
+    - bifunctors
+    - codec-argonaut
+    - console
+    - datetime
+    - effect
+    - either
+    - foldable-traversable
+    - foreign
+    - foreign-object
+    - functions
+    - halogen
+    - halogen-subscriptions
+    - maybe
+    - newtype
+    - now
+    - nullable
+    - ordered-collections
+    - parallel
+    - prelude
+    - record
+    - refs
+    - strings
+    - tailrec
+    - transformers
+    - tuples
+    - web-events
+    - web-html
+    - web-storage
+  test:
+    main: Test.Main
+    dependencies:
+      - exceptions
+workspace:
+  packageSet:
+    registry: 80.8.0
+  extraPackages: {}

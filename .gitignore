@@ -1,0 +1,21 @@
+# PureScript
+output/
+.spago/
+.psc-ide-port
+.purs-repl
+
+# Generated
+public/chat.js
+public/counter.js
+wrangler.jsonc
+
+# Node
+node_modules/
+
+# Wrangler
+.wrangler/
+.dev.vars*
+
+# OS and editors
+.DS_Store
+*.log
