@@ -56,9 +56,9 @@ fromRaw :: RawContainer -> Container
 fromRaw = Container
 
 -- | A Dockerfile path (built by wrangler) or a registry reference. Three
--- | `Dev` instances unless you say otherwise.
+-- | `Lite` instances unless you say otherwise.
 image :: String -> Image
-image path = { image: path, instances: 3, instanceType: Dev }
+image path = { image: path, instances: 3, instanceType: Lite }
 
 env :: Array (Tuple String String) -> Launch
 env pairs = Launch { env: Map.fromFoldable pairs, entrypoint: mempty, internet: mempty }

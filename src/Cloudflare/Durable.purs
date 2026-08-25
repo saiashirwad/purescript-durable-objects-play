@@ -14,7 +14,7 @@ import Cloudflare.Durable.Core (Handlers, Live, Manifest, Namespace, Object, Obj
 import Cloudflare.Durable.Events (Event, Signal(..), event, eventWith) as Events
 import Cloudflare.Durable.Sockets (Sockets) as Sockets
 import Cloudflare.Durable.Core (Live(..), Object, className, manifest)
-import Cloudflare.Durable.Init (Init, Plan, state, variable) as Init
+import Cloudflare.Durable.Init (Init, Plan, optional, state, variable) as Init
 import Cloudflare.Durable.Platform (namespaceFromBinding)
 import Cloudflare.Durable.Runtime (class MonadRuntime, PlatformError(..), Runtime, Socket, State, liftRuntime) as Runtime
 import Cloudflare.Worker (ContainerSpec, WorkerInit, WorkerRef, objectBinding, scriptName)

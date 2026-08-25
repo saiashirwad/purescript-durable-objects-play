@@ -74,12 +74,14 @@ simulate live = clock >>= \c -> simulateOn c live
 
 -- | A stand-in for the container image: what answers on each port once the
 -- | container is "started". Start and stop only flip a flag.
-type Stub = { serve :: Int -> Request -> Aff Response, launched :: Launch -> Aff Unit }
+-- | `variables` are what `Durable.variable` / `optional` see.
+type Stub = { serve :: Int -> Request -> Aff Response, launched :: Launch -> Aff Unit, variables :: Map String String }
 
 noContainer :: Stub
 noContainer =
   { serve: \port _ -> throwError $ error $ "nothing listens on port " <> show port <> "; give the simulator a Stub"
   , launched: \_ -> pure unit
+  , variables: Map.empty
   }
 
 simulateOn :: forall name api events. Clock -> Live name api events -> Aff (Namespace name api events)
@@ -161,7 +163,7 @@ simulateWith stub (Clock c) live@(Core.Live { object }) = do
         Just found -> pure found
         Nothing -> do
           { state, raw, box, alarm, sockets } <- fresh
-          activated <- activate live { state, variables: Map.empty, sockets: raw, container: box }
+          activated <- activate live { state, variables: stub.variables, sockets: raw, container: box }
           let created = { activated, alarm, sockets }
           liftEffect $ Ref.modify_ (Map.insert id created) instances
           pure created

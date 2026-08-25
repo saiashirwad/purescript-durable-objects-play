@@ -7,6 +7,7 @@ import Prelude
 import Chat.Client (Chat, RoomId)
 import Chat.Client as Chat
 import Chat.Room (Message, RoomApi, RoomEvents)
+import Chat.Room.Live (assistantName)
 import Cloudflare.Durable (Signal(..))
 import Cloudflare.Durable.Rpc as Rpc
 import Data.Variant (Variant, match)
@@ -52,6 +53,8 @@ foreign import requestNotifications :: Effect (Promise String)
 foreign import away :: Effect Boolean
 foreign import notify :: { title :: String, body :: String, tag :: String } -> Effect Unit
 foreign import setTitle :: String -> Effect Unit
+foreign import sessionStatus :: Effect (Promise Int)
+foreign import login :: String -> Effect (Promise Int)
 
 chat :: Chat
 chat = Chat.connect "/rpc"
@@ -63,7 +66,8 @@ type State =
   }
 
 data View
-  = Lobby { busy :: Boolean }
+  = Locked { passkey :: String, error :: Maybe String, busy :: Boolean }
+  | Lobby { busy :: Boolean }
   | Joining { id :: RoomId, name :: String }
   | InRoom RoomView
 
@@ -99,6 +103,8 @@ data Action
   | Loaded { messages :: Array Message, members :: Array String }
   | Tick
   | EnableNotifications
+  | SetPasskey String
+  | Unlock Event
   | CopyLink
   | Leave
 
@@ -124,9 +130,32 @@ type Html m = H.ComponentHTML Action () m
 
 render :: forall m. State -> Html m
 render st = case st.view of
+  Locked locked -> lockedView locked
   Lobby lobby -> lobbyView lobby
   Joining joining -> joiningView joining
   InRoom r -> roomView st r
+
+lockedView :: forall m. { passkey :: String, error :: Maybe String, busy :: Boolean } -> Html m
+lockedView { passkey, error, busy } =
+  HH.main [ cls "centered" ]
+    [ HH.form [ cls "card", HE.onSubmit Unlock ]
+        [ HH.h1_ [ HH.text "Passkey" ]
+        , HH.p [ cls "hint" ] [ HH.text "This chat is private. Enter the passkey to continue." ]
+        , HH.input
+            [ HP.type_ HP.InputPassword
+            , HP.placeholder "Passkey"
+            , HP.autofocus true
+            , HP.value passkey
+            , HE.onValueInput SetPasskey
+            ]
+        , HH.button
+            [ cls "primary", HP.type_ HP.ButtonSubmit, HP.disabled (busy || null (trim passkey)) ]
+            [ HH.text if busy then "Checking…" else "Unlock" ]
+        , case error of
+            Just why -> HH.p [ cls "error" ] [ HH.text why ]
+            Nothing -> HH.text ""
+        ]
+    ]
 
 lobbyView :: forall m. { busy :: Boolean } -> Html m
 lobbyView { busy } =
@@ -206,7 +235,7 @@ emptyRoom =
 -- | and name are left out and the bubble tucks under the previous one.
 messageItem :: forall m. String -> Tuple Boolean Message -> Html m
 messageItem author (Tuple continued m) =
-  HH.li [ HP.classes $ HH.ClassName <$> [ side ] <> (if continued then [ "continued" ] else []) ]
+  HH.li [ HP.classes $ HH.ClassName <$> [ side ] <> (if continued then [ "continued" ] else []) <> (if bot then [ "bot" ] else []) ]
     [ if headless then HH.span [ cls "gutter" ] [] else avatar m.author
     , HH.div [ cls "bubble" ]
         [ if headless then HH.text "" else HH.span [ cls "author" ] [ HH.text m.author ]
@@ -216,6 +245,7 @@ messageItem author (Tuple continued m) =
     ]
   where
   mine = m.author == author
+  bot = m.author == assistantName
   side = if mine then "mine" else "theirs"
   headless = mine || continued
 
@@ -246,7 +276,7 @@ composer r =
     [ typingLine r
     , HH.form [ cls "composer", HE.onSubmit Submit ]
         [ HH.input
-            [ HP.placeholder "Message"
+            [ HP.placeholder $ "Message · @" <> assistantName <> " to ask the assistant"
             , HP.autofocus true
             , HP.autocomplete HP.AutocompleteOff
             , HP.value r.draft
@@ -263,8 +293,8 @@ composer r =
     ]
 
 avatar :: forall w i. String -> HH.HTML w i
-avatar name = HH.span [ cls "avatar", HP.style ("--hue: " <> show (hue name)) ]
-  [ HH.text $ String.toUpper $ String.take 1 name ]
+avatar name = HH.span [ cls (if name == assistantName then "avatar bot" else "avatar"), HP.style ("--hue: " <> show (hue name)) ]
+  [ HH.text if name == assistantName then "✦" else String.toUpper $ String.take 1 name ]
   where
   hue = String.toCodePointArray >>> map fromEnum >>> Array.foldl (\h c -> (h * 31 + c) `mod` 360) 7
 
@@ -312,10 +342,26 @@ handleAction = case _ of
     author <- liftEffect $ fromMaybe "" <$> (Storage.getItem authorKey =<< localStorage)
     notifications <- liftEffect notificationPermission
     H.modify_ _ { author = author, notifications = notifications }
-    fragment <- liftEffect $ drop 1 <$> (Location.hash =<< location)
-    case Chat.parseRoomId chat fragment of
-      Just id -> handleAction $ Enter id
-      Nothing -> pure unit
+    admitted <- liftAff $ toAffE sessionStatus
+    if admitted == 204 then enterFromUrl
+    else H.modify_ _ { view = Locked { passkey: "", error: Nothing, busy: false } }
+
+  SetPasskey passkey -> H.modify_ \st -> case st.view of
+    Locked l -> st { view = Locked l { passkey = passkey, error = Nothing } }
+    _ -> st
+
+  Unlock event -> do
+    liftEffect $ preventDefault event
+    st <- H.get
+    case st.view of
+      Locked l -> do
+        H.modify_ _ { view = Locked l { busy = true } }
+        outcome <- liftAff $ toAffE $ login (trim l.passkey)
+        if outcome == 204 then do
+          H.modify_ _ { view = Lobby { busy: false } }
+          enterFromUrl
+        else H.modify_ _ { view = Locked l { busy = false, error = Just "That passkey is not right." } }
+      _ -> pure unit
 
   CreateRoom -> do
     H.modify_ _ { view = Lobby { busy: true } }
@@ -475,6 +521,12 @@ handleAction = case _ of
   focusComposer = H.getHTMLElementRef composerRef >>= traverse_ (liftEffect <<< focus)
 
   nowMs = unwrap <<< unInstant <$> now
+
+  enterFromUrl = do
+    fragment <- liftEffect $ drop 1 <$> (Location.hash =<< location)
+    case Chat.parseRoomId chat fragment of
+      Just id -> handleAction $ Enter id
+      Nothing -> pure unit
 
   -- A desktop notification and a tab-title count, only while the user is away.
   announce message = do

@@ -22,10 +22,12 @@
             "foldable-traversable",
             "foreign",
             "foreign-object",
+            "formatters",
             "functions",
             "functors",
             "halogen",
             "halogen-subscriptions",
+            "invariant",
             "maybe",
             "newtype",
             "now",
@@ -1079,6 +1081,32 @@
         "transformers"
       ]
     },
+    "formatters": {
+      "type": "registry",
+      "version": "7.0.0",
+      "integrity": "sha256-ViGY8XoXmPFDPnuFHfgJzq8+UJshr8erfDOcY6fofRk=",
+      "dependencies": [
+        "arrays",
+        "bifunctors",
+        "control",
+        "datetime",
+        "either",
+        "enums",
+        "foldable-traversable",
+        "integers",
+        "lists",
+        "maybe",
+        "newtype",
+        "numbers",
+        "ordered-collections",
+        "parsing",
+        "partial",
+        "prelude",
+        "strings",
+        "transformers",
+        "tuples"
+      ]
+    },
     "free": {
       "type": "registry",
       "version": "7.1.0",
@@ -1457,6 +1485,38 @@
         "transformers"
       ]
     },
+    "parsing": {
+      "type": "registry",
+      "version": "11.0.0",
+      "integrity": "sha256-N88gb/XbM29vw/Uop83shuMFT4wieQCz4wlQAct5eMs=",
+      "dependencies": [
+        "arrays",
+        "control",
+        "effect",
+        "either",
+        "enums",
+        "foldable-traversable",
+        "functions",
+        "identity",
+        "integers",
+        "lazy",
+        "lists",
+        "maybe",
+        "newtype",
+        "nullable",
+        "numbers",
+        "partial",
+        "prelude",
+        "st",
+        "strings",
+        "tailrec",
+        "transformers",
+        "tuples",
+        "unfoldable",
+        "unicode",
+        "unsafe-coerce"
+      ]
+    },
     "partial": {
       "type": "registry",
       "version": "4.0.0",
@@ -1618,6 +1678,21 @@
         "partial",
         "prelude",
         "tuples"
+      ]
+    },
+    "unicode": {
+      "type": "registry",
+      "version": "6.0.0",
+      "integrity": "sha256-5KugCNyYxscmZpnMbssOQA96XimuBN/bjHpdrtd5qaY=",
+      "dependencies": [
+        "arrays",
+        "enums",
+        "integers",
+        "maybe",
+        "partial",
+        "prelude",
+        "strings",
+        "unsafe-coerce"
       ]
     },
     "unsafe-coerce": {

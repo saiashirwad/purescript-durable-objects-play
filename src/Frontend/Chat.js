@@ -35,3 +35,12 @@ export const notify = ({ title, body, tag }) => () => {
 };
 
 export const setTitle = (title) => () => { document.title = title; };
+
+export const sessionStatus = () => fetch("/session").then((r) => r.status);
+
+export const login = (passkey) => () =>
+  fetch("/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ passkey }),
+  }).then((r) => r.status);

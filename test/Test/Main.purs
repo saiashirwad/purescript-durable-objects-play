@@ -3,7 +3,7 @@ module Test.Main where
 import Prelude
 
 import Chat.Room (PostError(..), RoomEvents)
-import Chat.Room.Live (roomLive)
+import Chat.Room.Live (roomLive, roomLiveWith)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Rpc (Rpc, RpcFailure(..))
 import Cloudflare.Durable.Rpc as Rpc
@@ -24,10 +24,15 @@ import Effect.Class (liftEffect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
 import Example.Counter (counter, counterLive)
+import Ai (AiError(..), Message(..), invoke, mount, structured, text, tool)
+import Ai.Model as Model
+import Ai.Schema as Schema
+import Data.Argonaut.Core as J
 import Example.Echo (echoLive)
 import Cloudflare.Worker as Worker
 import Cloudflare.Durable.Runtime (Launch(..))
 import Data.Map as Map
+import Data.Profunctor (lcmap)
 import Test.Journal (journalLive)
 import Test.Ledger (LedgerError(..), ledgerLive)
 import Test.Reminder (reminderLive)
@@ -157,6 +162,7 @@ main = launchAff_ do
   echoes <- Simulator.simulateWith
     { serve: \port request -> pure $ Worker.text 200 $ "port " <> show port <> " got " <> Worker.pathname request
     , launched: \(Launch l) -> liftEffect $ Ref.write l.env launched
+    , variables: Map.empty
     }
     timeline
     echoLive
@@ -199,6 +205,60 @@ main = launchAff_ do
     _ <- book.reset unit
     gone <- book.entries "rent"
     pure $ gone == []
+
+  check "an agent runs the tool loop: call, result, answer" do
+    called <- liftEffect $ Ref.new 0
+    model <- Model.scripted
+      [ { message: Assistant { text: Nothing, toolCalls: [ { id: "c1", name: "members", arguments: J.jsonEmptyObject } ] }, finish: "tool_calls", usage: Nothing }
+      , { message: Assistant { text: Just "hi ann", toolCalls: [] }, finish: "stop", usage: Nothing }
+      ]
+    let
+      members = tool "members" "who is here" (Schema.object {}) (Schema.array Schema.string) \_ -> do
+        liftEffect $ Ref.modify_ (_ + 1) called
+        pure [ "ann" ]
+      greeter = mount model [ members ] $ text "Greet whoever is here."
+    answer <- invoke greeter "hello?"
+    calls <- liftEffect $ Ref.read called
+    pure $ answer == Right "hi ann" && calls == 1
+
+  check "structured agents decode the schema; agents compose as a Category" do
+    model <- Model.scripted
+      [ { message: Assistant { text: Just "{\"n\": 3}", toolCalls: [] }, finish: "stop", usage: Nothing }
+      , { message: Assistant { text: Just "three", toolCalls: [] }, finish: "stop", usage: Nothing }
+      ]
+    let
+      counter' = mount model [] $ structured "Count." (Schema.object { n: Schema.int })
+      namer = mount model [] $ text "Name the number."
+      workflow = counter' >>> lcmap (\r -> show r.n) namer
+    answer <- invoke workflow "how many?"
+    pure $ answer == Right "three"
+
+  check "duplicate tool names are rejected at mount" do
+    model <- Model.scripted []
+    let
+      t = tool "x" "x" (Schema.object {}) Schema.string \_ -> pure ""
+      bad = mount model [ t, t ] $ text ""
+    answer <- invoke bad ""
+    pure $ answer == Left (Misconfigured "duplicate tool names: [\"x\",\"x\"]")
+
+  check "a post mentioning @ai is answered from the alarm, with a tool call" do
+    model <- Model.scripted
+      [ { message: Assistant { text: Nothing, toolCalls: [ { id: "c1", name: "members", arguments: J.jsonEmptyObject } ] }, finish: "tool_calls", usage: Nothing }
+      , { message: Assistant { text: Just "hello ann, just us two", toolCalls: [] }, finish: "stop", usage: Nothing }
+      ]
+    bots <- Simulator.simulateWith
+      (Simulator.noContainer { variables = Map.singleton "DEEPSEEK_API_KEY" "test-key" })
+      timeline
+      (roomLiveWith \_ -> model)
+    id <- Durable.newUniqueId bots
+    logs <- liftEffect $ Ref.new []
+    _ <- liftEffect $ Durable.listen bots id "ann" \signal -> Ref.modify_ (_ <> [ describe signal ]) logs
+    _ <- Rpc.run $ (Durable.get bots id).post { author: "ann", text: "hey @ai, who is here?" }
+    Simulator.advance timeline (Milliseconds 0.0)
+    seen <- liftEffect $ Ref.read logs
+    history <- Rpc.run $ (Durable.get bots id).history unit
+    pure $ (seen == [ "opened", "joined ann", "message hey @ai, who is here?", "typing ai", "message hello ann, just us two" ])
+      && ((map _.author <$> history) == Right [ "ann", "ai" ])
 
   log "All tests passed."
 

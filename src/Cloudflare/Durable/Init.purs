@@ -5,6 +5,7 @@ module Cloudflare.Durable.Init
   , InstanceType(..)
   , Plan
   , container
+  , optional
   , state
   , variable
   , module Static
@@ -24,6 +25,7 @@ import Data.Maybe (Maybe(..))
 -- | container image (`First`: the first declaration wins).
 type Plan = { variables :: Array String, container :: First Image }
 
+-- | `Dev` is Cloudflare's old name for `Lite`.
 data InstanceType = Lite | Dev | Basic | Standard1 | Standard2 | Standard3 | Standard4
 
 derive instance eqInstanceType :: Eq InstanceType
@@ -31,7 +33,7 @@ derive instance eqInstanceType :: Eq InstanceType
 instance showInstanceType :: Show InstanceType where
   show = case _ of
     Lite -> "lite"
-    Dev -> "dev"
+    Dev -> "lite"
     Basic -> "basic"
     Standard1 -> "standard-1"
     Standard2 -> "standard-2"
@@ -53,6 +55,10 @@ state = static mempty \env -> pure env.state
 -- | there into wrangler config.
 container :: Image -> Init RawContainer
 container image = static { variables: [], container: First (Just image) } \env -> pure env.container
+
+-- | A variable that may be unbound: `Nothing` then, no failure.
+optional :: String -> Init (Maybe String)
+optional name = static { variables: [ name ], container: mempty } \env -> pure $ Map.lookup name env.variables
 
 variable :: String -> Init String
 variable name = static { variables: [ name ], container: mempty } \env ->

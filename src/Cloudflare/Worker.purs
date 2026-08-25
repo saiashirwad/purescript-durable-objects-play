@@ -9,6 +9,8 @@ module Cloudflare.Worker
   , WorkerInit
   , WorkerRef
   , body
+  , cookie
+  , guard
   , header
   , json
   , make
@@ -16,6 +18,7 @@ module Cloudflare.Worker
   , objectBinding
   , pathname
   , plan
+  , protect
   , rebase
   , ref
   , requestTo
@@ -24,7 +27,9 @@ module Cloudflare.Worker
   , route
   , scriptName
   , serve
+  , sha256
   , text
+  , textWith
   , toExport
   , url
   , variable
@@ -62,6 +67,9 @@ foreign import json :: Int -> Json -> Response
 foreign import bodyImpl :: Request -> Effect (Promise Json)
 foreign import headerImpl :: Request -> String -> Nullable String
 foreign import rebase :: String -> Request -> Request
+foreign import cookieImpl :: Request -> String -> Nullable String
+foreign import textWith :: Int -> Array { name :: String, value :: String } -> String -> Response
+foreign import sha256Impl :: String -> Effect (Promise String)
 foreign import requestTo :: String -> Request
 foreign import status :: Response -> Int
 foreign import responseTextImpl :: Response -> Effect (Promise String)
@@ -91,6 +99,12 @@ responseText = toAffE <<< responseTextImpl
 
 header :: Request -> String -> Maybe String
 header request = toMaybe <<< headerImpl request
+
+cookie :: Request -> String -> Maybe String
+cookie request = toMaybe <<< cookieImpl request
+
+sha256 :: String -> Aff String
+sha256 = toAffE <<< sha256Impl
 
 newtype WorkerRef = WorkerRef String
 
@@ -123,6 +137,16 @@ instance monoidRoute :: Monoid Route where
 
 route :: (Request -> Aff (Maybe Response)) -> Route
 route handler = Route $ MaybeT <<< handler
+
+-- | Let requests through only when `allowed` says so; 401 otherwise.
+guard :: (Request -> Aff Boolean) -> Route -> Route
+guard allowed (Route handler) = Route \request -> MaybeT do
+  ok <- allowed request
+  if ok then runMaybeT (handler request) else pure $ Just $ text 401 "passkey required"
+
+-- | `guard`, over a whole Worker: the check may need bindings of its own.
+protect :: WorkerInit (Request -> Aff Boolean) -> Worker -> Worker
+protect check (Worker routes) = Worker $ lift2 guard check routes
 
 -- | 404 when nothing matches.
 serve :: Route -> Request -> Aff Response

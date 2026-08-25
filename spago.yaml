@@ -17,9 +17,11 @@ package:
     - either
     - foldable-traversable
     - foreign
+    - formatters
     - foreign-object
     - functions
     - functors
+    - invariant
     - halogen
     - halogen-subscriptions
     - maybe

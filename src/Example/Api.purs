@@ -17,11 +17,13 @@ import Cloudflare.Worker as Worker
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), split)
+import Example.Access (access, login)
 import Example.Counter (CounterApi, counterLive)
 import Example.Echo (echoLive)
 
+-- | Everything but `login` sits behind the passkey.
 api :: Worker
-api = chat <> counter <> echo
+api = login <> Worker.protect access (chat <> counter <> echo)
 
 chat :: Worker
 chat = Worker.make ado

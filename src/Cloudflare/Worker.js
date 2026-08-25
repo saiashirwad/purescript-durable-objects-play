@@ -26,6 +26,26 @@ export const responseTextImpl = (response) => () => response.text();
 
 export const headerImpl = (request) => (name) => request.headers.get(name);
 
+export const cookieImpl = (request) => (name) => {
+  const jar = request.headers.get("cookie") ?? "";
+  for (const part of jar.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return decodeURIComponent(rest.join("="));
+  }
+  return null;
+};
+
+export const textWith = (status) => (headers) => (body) => {
+  const h = new Headers({ "content-type": "text/plain; charset=utf-8" });
+  for (const { name, value } of headers) h.append(name, value);
+  return new Response(body, { status, headers: h });
+};
+
+export const sha256Impl = (text) => () =>
+  crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)).then((buffer) =>
+    Array.from(new Uint8Array(buffer), (b) => b.toString(16).padStart(2, "0")).join("")
+  );
+
 // The same request at another path, so an object sees `/x` not `/rpc/Class/id/http/x`.
 export const rebase = (path) => (request) => {
   const url = new URL(request.url);
