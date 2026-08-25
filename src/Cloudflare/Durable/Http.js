@@ -1,4 +1,4 @@
-// Works in the browser and in workerd: both have `fetch`.
+// Works in the browser and in workerd.
 export const postJson = (url) => (body) => () =>
   fetch(url, {
     method: "POST",

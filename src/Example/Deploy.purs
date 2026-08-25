@@ -1,5 +1,3 @@
--- | The deployment, as a value. `scripts/config.mjs` writes it to
--- | `wrangler.jsonc`.
 module Example.Deploy
   ( config
   ) where

@@ -1,6 +1,5 @@
-// Thin wrappers over Cloudflare's DurableObjectState and DurableObjectNamespace.
-// No imports: this file also loads under Node, where it is never called.
 
+// No imports, so this file loads under Node.
 export const storageGet = (ctx) => (key) => () =>
   ctx.storage.get(key).then((value) => (value === undefined ? null : value));
 

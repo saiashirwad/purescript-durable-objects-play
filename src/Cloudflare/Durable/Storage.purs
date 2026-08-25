@@ -1,5 +1,3 @@
--- | Typed key-value storage. A `Key a` carries its codec, so `get` and `put`
--- | agree on the value's type and its encoding.
 module Cloudflare.Durable.Storage
   ( Key
   , delete

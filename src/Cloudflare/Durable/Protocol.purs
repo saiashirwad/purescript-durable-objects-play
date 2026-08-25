@@ -1,6 +1,3 @@
--- | The wire between a client stub and an object. Both directions are derived
--- | from the descriptor record by walking its row, so no stub is generated and
--- | no method is inspected at runtime.
 module Cloudflare.Durable.Protocol
   ( RawCall
   , RawHandler
@@ -40,13 +37,10 @@ import Record.Builder (Builder)
 import Record.Builder as Builder
 import Type.Proxy (Proxy(..))
 
--- | Sends one encoded request to a named method and returns the encoded envelope.
 type RawCall = String -> Json -> Aff Json
 
--- | Handles one encoded request and returns the encoded envelope.
 type RawHandler = Json -> Aff Json
 
--- | The method names in a descriptor row.
 class MethodNames (list :: RowList Type) where
   methodNames :: Proxy list -> Array String
 
@@ -56,7 +50,6 @@ instance methodNamesNil :: MethodNames Nil where
 instance methodNamesCons :: (IsSymbol name, MethodNames tail) => MethodNames (Cons name value tail) where
   methodNames _ = [ reflectSymbol (Proxy :: Proxy name) ] <> methodNames (Proxy :: Proxy tail)
 
--- | Build the server-side dispatch table from a descriptor and an implementation.
 class Serve (list :: RowList Type) (spec :: Row Type) (api :: Row Type) where
   serveList :: Proxy list -> Record spec -> Record api -> Map String RawHandler
 
@@ -76,7 +69,6 @@ instance serveCons ::
     where
     name = Proxy :: Proxy name
 
--- | Build the client stub from a descriptor and a transport.
 class Connect (list :: RowList Type) (spec :: Row Type) (api :: Row Type) | list -> api where
   connectList :: Proxy list -> Record spec -> RawCall -> Builder (Record ()) (Record api)
 
@@ -120,7 +112,6 @@ stub name (Method m) call request = Rpc $ ExceptT do
       Left err -> Left $ DecodeError $ CA.printJsonDecodeError err
       Right result -> result
 
--- | The response envelope: one tag per outcome.
 encodeEnvelope :: forall e a. JsonCodec e -> JsonCodec a -> Either (RpcFailure e) a -> Json
 encodeEnvelope errorCodec successCodec = case _ of
   Right value -> tagged "ok" [ "value" /\ CA.encode successCodec value ]

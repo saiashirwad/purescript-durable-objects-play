@@ -1,5 +1,3 @@
--- | The Cloudflare backend: `State` over `DurableObjectState`, and a
--- | `Namespace` over a `DurableObjectNamespace` binding.
 module Cloudflare.Durable.Platform
   ( namespaceFromBinding
   , stateFromContext
@@ -27,7 +25,6 @@ foreign import variables :: Foreign -> Array String -> Effect (Object.Object Str
 foreign import call :: Foreign -> { kind :: String, value :: String } -> String -> Json -> Effect (Promise Json)
 foreign import unique :: Foreign -> Effect String
 
--- | Wrap a `DurableObjectState` (`ctx`).
 stateFromContext :: Foreign -> State
 stateFromContext ctx = State
   { get: \key -> toMaybe <$> toAffE (storageGet ctx key)
@@ -35,11 +32,9 @@ stateFromContext ctx = State
   , delete: \key -> toAffE (storageDelete ctx key)
   }
 
--- | Read the named string variables from a Worker `env`.
 variablesFrom :: Foreign -> Array String -> Effect (Map String String)
 variablesFrom env names = Map.fromFoldable <<< (Object.toUnfoldable :: _ -> Array _) <$> variables env names
 
--- | Wrap a `DurableObjectNamespace` binding.
 namespaceFromBinding :: forall name api. Object name api -> Foreign -> Namespace name api
 namespaceFromBinding object ns = namespace object
   { call: \id method request -> toAffE $ call ns (encodeId id) method request

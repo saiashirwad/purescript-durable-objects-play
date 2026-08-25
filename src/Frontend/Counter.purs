@@ -1,5 +1,3 @@
--- | A page for poking the Counter. It talks to the object through the same
--- | `Namespace "Counter" CounterApi` the Worker uses, over `/rpc`.
 module Frontend.Counter
   ( main
   ) where

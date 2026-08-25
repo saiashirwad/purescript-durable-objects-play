@@ -1,16 +1,7 @@
--- | The Worker entry's view of a `Live` object. From JavaScript:
--- |
 -- | ```javascript
 -- | import { DurableObject } from "cloudflare:workers";
--- | import { bridge } from "../output/Cloudflare.Durable.Bridge/index.js";
--- | import { counterLive } from "../output/Example.Counter/index.js";
--- |
 -- | export class Counter extends bridge(DurableObject, counterLive) {}
 -- | ```
--- |
--- | The class activates once under `blockConcurrencyWhile` and exposes one
--- | public method per entry in the manifest. Cloudflare serves public class
--- | methods as RPC methods.
 module Cloudflare.Durable.Bridge
   ( bridge
   ) where

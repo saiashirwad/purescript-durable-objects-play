@@ -1,6 +1,3 @@
--- | Codecs decide how values cross the RPC and storage boundaries. Explicit
--- | `JsonCodec` values are the primitive; `HasCodec` is sugar for the common
--- | types so most declarations need no codec at all.
 module Cloudflare.Durable.Codec
   ( class HasCodec
   , class HasFieldCodecs
@@ -43,7 +40,6 @@ instance hasCodecArray :: HasCodec a => HasCodec (Array a) where
 instance hasCodecMaybe :: HasCodec a => HasCodec (Maybe a) where
   codec = CAC.maybe codec
 
--- | Records encode as JSON objects, one property per field.
 instance hasCodecRecord :: (RowToList r list, HasFieldCodecs list r) => HasCodec (Record r) where
   codec = CA.object "Record" $ fieldCodecs (Proxy :: Proxy list)
 

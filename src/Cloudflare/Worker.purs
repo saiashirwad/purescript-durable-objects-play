@@ -1,12 +1,10 @@
--- | A Worker as a value. `WorkerInit` is applicative like `Init`: its plan
--- | (bindings, variables) is visible without an `env`, so `wranglerConfig`
--- | can write the deployment from it.
 module Cloudflare.Worker
   ( Handlers
   , ObjectBinding
   , Plan
   , Request
   , Response
+  , Route
   , Worker
   , WorkerInit
   , WorkerRef
@@ -18,7 +16,9 @@ module Cloudflare.Worker
   , pathname
   , plan
   , ref
+  , route
   , scriptName
+  , serve
   , text
   , toExport
   , url
@@ -28,6 +28,11 @@ module Cloudflare.Worker
 
 import Prelude
 
+import Cloudflare.Static (Static, static)
+import Cloudflare.Static as Static
+import Control.Alt ((<|>))
+import Control.Monad.Maybe.Trans (MaybeT(..), runMaybeT)
+import Control.Plus (empty)
 import Control.Promise (Promise, fromAff, toAffE)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
@@ -51,49 +56,21 @@ foreign import variableImpl :: Foreign -> String -> Effect String
 foreign import bindingImpl :: Foreign -> String -> Effect Foreign
 foreign import toExportImpl :: (Foreign -> Effect { fetch :: Request -> Effect (Promise Response) }) -> Foreign
 
--- | A Durable Object namespace this Worker binds. `scriptName` is set when
--- | another Worker hosts the class.
 type ObjectBinding = { className :: String, binding :: String, scriptName :: Maybe String }
 
 type Plan = { objects :: Array ObjectBinding, variables :: Array String }
 
-newtype WorkerInit a = WorkerInit { plan :: Plan, build :: Foreign -> Effect a }
+type WorkerInit = Static Plan Foreign Effect
 
-instance functorWorkerInit :: Functor WorkerInit where
-  map f (WorkerInit i) = WorkerInit { plan: i.plan, build: map f <<< i.build }
-
-instance applyWorkerInit :: Apply WorkerInit where
-  apply (WorkerInit f) (WorkerInit x) = WorkerInit
-    { plan:
-        { objects: f.plan.objects <> x.plan.objects
-        , variables: f.plan.variables <> x.plan.variables
-        }
-    , build: \env -> f.build env <*> x.build env
-    }
-
-instance applicativeWorkerInit :: Applicative WorkerInit where
-  pure a = WorkerInit { plan: { objects: [], variables: [] }, build: \_ -> pure a }
-
--- | A string variable from the Worker's environment.
 variable :: String -> WorkerInit String
-variable name = WorkerInit
-  { plan: { objects: [], variables: [ name ] }
-  , build: \env -> variableImpl env name
-  }
+variable name = static { objects: [], variables: [ name ] } \env -> variableImpl env name
 
--- | The raw namespace binding for an object. `Cloudflare.Durable.host` and
--- | `from` wrap this with a typed `Namespace`.
 objectBinding :: ObjectBinding -> WorkerInit Foreign
-objectBinding b = WorkerInit
-  { plan: { objects: [ b ], variables: [] }
-  , build: \env -> bindingImpl env b.binding
-  }
+objectBinding b = static { objects: [ b ], variables: [] } \env -> bindingImpl env b.binding
 
--- | The request body, parsed as JSON.
 body :: Request -> Aff Json
 body = toAffE <<< bodyImpl
 
--- | Another Worker, by script name.
 newtype WorkerRef = WorkerRef String
 
 ref :: String -> WorkerRef
@@ -107,21 +84,34 @@ type Handlers = { fetch :: Request -> Aff Response }
 newtype Worker = Worker { plan :: Plan, build :: Foreign -> Effect Handlers }
 
 make :: WorkerInit Handlers -> Worker
-make (WorkerInit i) = Worker { plan: i.plan, build: i.build }
+make init = Worker { plan: Static.plan init, build: Static.build init }
+
+-- | `a <> b` tries `a`, then `b`. `mempty` matches nothing.
+newtype Route = Route (Request -> MaybeT Aff Response)
+
+instance semigroupRoute :: Semigroup Route where
+  append (Route f) (Route g) = Route \request -> f request <|> g request
+
+instance monoidRoute :: Monoid Route where
+  mempty = Route \_ -> empty
+
+route :: (Request -> Aff (Maybe Response)) -> Route
+route handler = Route $ MaybeT <<< handler
+
+-- | 404 when nothing matches.
+serve :: Route -> Request -> Aff Response
+serve (Route handler) request = runMaybeT (handler request) <#> case _ of
+  Just response -> response
+  Nothing -> text 404 "not found"
 
 plan :: Worker -> Plan
 plan (Worker w) = w.plan
 
--- | The module's default export: `{ fetch(request, env) }`.
 toExport :: Worker -> Foreign
 toExport (Worker w) = toExportImpl \env -> do
   handlers <- w.build env
   pure { fetch: fromAff <<< handlers.fetch }
 
--- | A `wrangler.jsonc` document for this Worker. Hosted classes get a
--- | declarative `exports` entry with SQLite storage; classes hosted elsewhere
--- | get a binding with `script_name`. `assets` is a directory of static
--- | files to serve ahead of the Worker.
 wranglerConfig
   :: { name :: String, main :: String, compatibilityDate :: String, assets :: Maybe String }
   -> Worker

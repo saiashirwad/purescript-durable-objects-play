@@ -1,5 +1,3 @@
--- | A test object with a domain error and a deliberately corrupt key, so the
--- | tests can watch both failure kinds cross the envelope.
 module Test.Ledger
   ( LedgerApi
   , LedgerError(..)
@@ -46,7 +44,7 @@ ledger = Durable.object
 balanceKey :: Storage.Key Int
 balanceKey = Storage.key "balance"
 
--- | The same key with the wrong codec, to poison the stored value.
+-- | Same key, wrong codec, on purpose.
 poisonKey :: Storage.Key String
 poisonKey = Storage.key "balance"
 

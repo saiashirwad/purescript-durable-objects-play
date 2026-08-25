@@ -1,5 +1,3 @@
--- | The chat page. `/` is the lobby; `/#<room id>` is a room, and that URL
--- | is the invitation. A visitor picks a name before joining.
 module Frontend.Chat
   ( main
   ) where

@@ -1,6 +1,3 @@
--- | An in-memory backend. Each id gets its own instance and its own storage,
--- | activated on first use. Calls cross the codecs and the response envelope
--- | exactly as they do over the wire, so tests exercise the real protocol.
 module Cloudflare.Durable.Simulator
   ( simulate
   ) where

@@ -1,6 +1,3 @@
--- | One remote or local call. `Rpc e a` does not know whether it runs inside
--- | the object or in a caller; the library provides both interpreters, so the
--- | implementation record and the client stub share one type.
 module Cloudflare.Durable.Rpc
   ( Method(..)
   , NoError
@@ -31,7 +28,6 @@ import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
 
--- | The domain error of a method that has none.
 newtype NoError = NoError Void
 
 instance showNoError :: Show NoError where
@@ -43,7 +39,6 @@ instance eqNoError :: Eq NoError where
 instance hasCodecNoError :: HasCodec NoError where
   codec = CA.prismaticCodec "NoError" (const Nothing) (\(NoError v) -> absurd v) CA.json
 
--- | Everything the caller can learn when a call does not succeed.
 data RpcFailure e
   = DomainError e
   | PlatformError PlatformError
@@ -78,24 +73,18 @@ derive newtype instance monadErrorRpc :: MonadError (RpcFailure e) (Rpc e)
 instance monadRuntimeRpc :: MonadRuntime (Rpc e) where
   liftRuntime action = Rpc $ ExceptT $ lmap PlatformError <$> Runtime.run action
 
--- | Fail with a domain error.
 fail :: forall e a. e -> Rpc e a
 fail = throwError <<< DomainError
 
 run :: forall e a. Rpc e a -> Aff (Either (RpcFailure e) a)
 run (Rpc action) = runExceptT action
 
--- | Change the domain error, for example to combine calls with different
--- | error types in one block.
 mapError :: forall e e' a. (e -> e') -> Rpc e a -> Rpc e' a
 mapError f (Rpc action) = Rpc $ withExceptT (map f) action
 
--- | A call with no domain error fits any error type.
 infallible :: forall e a. Rpc NoError a -> Rpc e a
 infallible = mapError \(NoError v) -> absurd v
 
--- | The description of one method: its codecs. The descriptor keeps these so
--- | the bridge never has to inspect an implementation.
 newtype Method e req res = Method
   { request :: JsonCodec req
   , success :: JsonCodec res

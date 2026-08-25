@@ -1,5 +1,3 @@
-// The Worker entry. Everything below is glue; the application lives in
-// PureScript. `wrangler.jsonc` is generated from `api` by `npm run config`.
 import { DurableObject } from "cloudflare:workers";
 import { bridge } from "../output/Cloudflare.Durable.Bridge/index.js";
 import { toExport } from "../output/Cloudflare.Worker/index.js";

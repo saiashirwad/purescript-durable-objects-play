@@ -1,4 +1,4 @@
-// Writes wrangler.jsonc from Example.Deploy. Run after `spago build`.
+// Run after `spago build`.
 import { writeFileSync } from "node:fs";
 import { config } from "../output/Example.Deploy/index.js";
 

@@ -1,6 +1,6 @@
-// Builds the class Cloudflare instantiates. `base` is `DurableObject` from
-// "cloudflare:workers", passed in so this file has no platform import.
 
+// `base` is DurableObject from cloudflare:workers, passed in so this file has
+// no platform import and loads under Node.
 export const bridgeImpl = (base, methods, activate) => {
   class Bridged extends base {
     constructor(ctx, env) {

@@ -9,6 +9,8 @@ package:
     - bifunctors
     - codec-argonaut
     - console
+    - const
+    - control
     - datetime
     - effect
     - either
@@ -16,6 +18,7 @@ package:
     - foreign
     - foreign-object
     - functions
+    - functors
     - halogen
     - halogen-subscriptions
     - maybe

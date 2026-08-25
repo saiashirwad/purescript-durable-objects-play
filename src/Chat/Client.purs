@@ -1,15 +1,3 @@
--- | The chat from the client's side. A `Chat` is a connection to the server;
--- | a `Room` is one conversation, addressed by a `RoomId` that doubles as the
--- | invitation link. `listen` follows a room until you `stop`.
--- |
--- | ```purescript
--- | let chat = Chat.connect "/rpc"
--- | id <- Chat.createRoom chat
--- | let room = Chat.openRoom chat id
--- | subscription <- Chat.listen room 0 \messages -> log (show messages)
--- | _ <- Chat.send room { author: "ann", text: "hello" }
--- | Chat.stop subscription
--- | ```
 module Chat.Client
   ( Chat
   , Room
@@ -53,11 +41,9 @@ newtype Room = Room { id :: RoomId, stub :: Record RoomApi }
 
 newtype Subscription = Subscription (Fiber Unit)
 
--- | Connect to a server that runs `Http.serve prefix rooms`.
 connect :: String -> Chat
 connect prefix = Chat $ Http.connect prefix room
 
--- | A fresh room with an id nobody can guess.
 createRoom :: Chat -> Aff RoomId
 createRoom (Chat rooms) = Durable.newUniqueId rooms
 
@@ -70,7 +56,6 @@ roomId (Room r) = r.id
 printRoomId :: RoomId -> String
 printRoomId = Durable.idToString
 
--- | Read an id back from a link.
 parseRoomId :: Chat -> String -> Maybe RoomId
 parseRoomId (Chat rooms) raw =
   let
@@ -84,9 +69,7 @@ history (Room r) = Rpc.run $ r.stub.history unit
 send :: Room -> NewMessage -> Aff (Either (RpcFailure PostError) Message)
 send (Room r) = Rpc.run <<< r.stub.post
 
--- | Follow a room from message id `after` (0 for everything). The callback
--- | gets each batch of new messages. A failed poll waits a moment and tries
--- | again, so a flaky connection does not end the subscription.
+-- | From message id `after` (0 for all). A failed poll retries after 2 seconds.
 listen :: Room -> Int -> (Array Message -> Effect Unit) -> Aff Subscription
 listen (Room r) after deliver = Subscription <$> forkAff (loop after)
   where
@@ -103,7 +86,6 @@ listen (Room r) after deliver = Subscription <$> forkAff (loop after)
 stop :: Subscription -> Aff Unit
 stop (Subscription fiber) = killFiber (error "unsubscribed") fiber
 
--- | A short line for the screen.
 describeFailure :: forall e. Show e => RpcFailure e -> String
 describeFailure = case _ of
   DomainError e -> show e
