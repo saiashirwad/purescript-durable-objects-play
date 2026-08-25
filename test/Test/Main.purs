@@ -2,7 +2,10 @@ module Test.Main where
 
 import Prelude
 
-import Chat.Room (PostError(..), RoomEvents)
+import Chat.Room (PostError(..), ReactError(..), RoomEvents)
+import Chat.Markdown (Block(..), Inline(..))
+import Chat.Markdown as Markdown
+import Data.Array as Array
 import Chat.Room.Live (roomLive, roomLiveWith)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Rpc (Rpc, RpcFailure(..))
@@ -80,14 +83,14 @@ main = launchAff_ do
   check "a room keeps its messages in order" $ succeeds do
     id <- liftAff $ Durable.newUniqueId rooms
     let chat = Durable.get rooms id
-    first <- chat.post { author: "ann", text: "hello" }
-    second <- chat.post { author: "bob", text: "hi" }
+    first <- chat.post { author: "ann", text: "hello", images: [], replyTo: Nothing }
+    second <- chat.post { author: "bob", text: "hi", images: [], replyTo: Nothing }
     history <- Rpc.infallible $ chat.history unit
     pure $ (_.id <$> history) == [ 1, 2 ] && first.id == 1 && second.author == "bob"
 
   check "a blank post is a domain error" do
     let chat = Durable.getByName rooms "validation"
-    result <- Rpc.run $ chat.post { author: "ann", text: "   " }
+    result <- Rpc.run $ chat.post { author: "ann", text: "   ", images: [], replyTo: Nothing }
     pure $ result == Left (DomainError TextRequired)
 
   check "sockets get posts and presence; members tracks them" do
@@ -99,7 +102,7 @@ main = launchAff_ do
     _ <- liftEffect $ Durable.listen rooms id "ann" (record annLog)
     stopBob <- liftEffect $ Durable.listen rooms id "bob" (record bobLog)
     _ <- Rpc.run $ chat.typing "bob"
-    _ <- Rpc.run $ chat.post { author: "ann", text: "hi" }
+    _ <- Rpc.run $ chat.post { author: "ann", text: "hi", images: [], replyTo: Nothing }
     members <- Rpc.run $ chat.members unit
     liftEffect stopBob
     after <- Rpc.run $ chat.members unit
@@ -114,7 +117,7 @@ main = launchAff_ do
     id <- liftAff $ Durable.newUniqueId rooms
     let byId = Durable.get rooms id
     let byName = Durable.getByName rooms (Durable.idToString id)
-    _ <- byId.post { author: "ann", text: "only here" }
+    _ <- byId.post { author: "ann", text: "only here", images: [], replyTo: Nothing }
     other <- Rpc.infallible $ byName.history unit
     pure $ length other == 0 && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
 
@@ -253,12 +256,65 @@ main = launchAff_ do
     id <- Durable.newUniqueId bots
     logs <- liftEffect $ Ref.new []
     _ <- liftEffect $ Durable.listen bots id "ann" \signal -> Ref.modify_ (_ <> [ describe signal ]) logs
-    _ <- Rpc.run $ (Durable.get bots id).post { author: "ann", text: "hey @ai, who is here?" }
+    _ <- Rpc.run $ (Durable.get bots id).post { author: "ann", text: "hey @ai, who is here?", images: [], replyTo: Nothing }
     Simulator.advance timeline (Milliseconds 0.0)
     seen <- liftEffect $ Ref.read logs
     history <- Rpc.run $ (Durable.get bots id).history unit
     pure $ (seen == [ "opened", "joined ann", "message hey @ai, who is here?", "typing ai", "message hello ann, just us two" ])
       && ((map _.author <$> history) == Right [ "ann", "ai" ])
+
+  check "markdown parses blocks and inlines, and finds mentions" $ pure $
+    Markdown.parse "# Hi @bob\nsee **this** and `x` at https://a.io/p.\n\n> quoted\n- one\n- two\n```purs\nmain = 1\n```"
+      ==
+        [ Heading 1 [ Text "Hi ", Mention "bob" ]
+        , Paragraph [ Text "see ", Bold [ Text "this" ], Text " and ", InlineCode "x", Text " at ", Link { text: "https://a.io/p", url: "https://a.io/p" }, Text "." ]
+        , Quote [ Paragraph [ Text "quoted" ] ]
+        , Bullets [ [ Text "one" ], [ Text "two" ] ]
+        , Code (Just "purs") "main = 1"
+        ]
+      && Markdown.mentions "@ann and @ann, cc @bob but not a@b.c" == [ "ann", "bob", "b.c" ]
+
+  check "replies must point at a real message; mentions are recorded" do
+    let chat = Durable.getByName rooms "threads"
+    first <- Rpc.run $ chat.post { author: "ann", text: "hello @bob", images: [], replyTo: Nothing }
+    bad <- Rpc.run $ chat.post { author: "bob", text: "??", images: [], replyTo: Just 99 }
+    good <- Rpc.run $ chat.post { author: "bob", text: "hi!", images: [], replyTo: Just 1 }
+    missing <- Rpc.run $ chat.post { author: "bob", text: "pic", images: [ 42 ], replyTo: Nothing }
+    pure $ (map _.mentions first == Right [ "bob" ])
+      && bad == Left (DomainError (NoSuchReply 99))
+      && (map _.replyTo good == Right (Just 1))
+      && missing == Left (DomainError (NoSuchImage 42))
+
+  check "reactions toggle per person and broadcast an update" do
+    id <- Durable.newUniqueId rooms
+    let chat = Durable.get rooms id
+    logs <- liftEffect $ Ref.new []
+    _ <- liftEffect $ Durable.listen rooms id "ann" \signal -> Ref.modify_ (_ <> [ describe signal ]) logs
+    _ <- Rpc.run $ chat.post { author: "ann", text: "vote", images: [], replyTo: Nothing }
+    a <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "ann" }
+    b <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "bob" }
+    c <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "ann" }
+    d <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "bob" }
+    none <- Rpc.run $ chat.react { id: 7, emoji: "👍", by: "bob" }
+    seen <- liftEffect $ Ref.read logs
+    pure $ (map _.reactions a == Right [ { emoji: "👍", by: [ "ann" ] } ])
+      && (map _.reactions b == Right [ { emoji: "👍", by: [ "ann", "bob" ] } ])
+      && (map _.reactions c == Right [ { emoji: "👍", by: [ "bob" ] } ])
+      && (map _.reactions d == Right [])
+      && none == Left (DomainError (NoSuchMessage 7))
+      && Array.drop 3 seen == [ "updated [\"👍×1\"]", "updated [\"👍×2\"]", "updated [\"👍×1\"]", "updated []" ]
+
+  check "images round-trip through the room's fetch hook and validate on post" do
+    id <- Durable.newUniqueId rooms
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    uploaded <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
+    body <- Worker.responseText uploaded
+    rejected <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "text/plain", base64: "aGk=" }
+    served <- Durable.http rooms id $ Worker.requestTo "http://room/image/1"
+    missing <- Durable.http rooms id $ Worker.requestTo "http://room/image/9"
+    posted <- Rpc.run $ (Durable.get rooms id).post { author: "ann", text: "", images: [ 1 ], replyTo: Nothing }
+    pure $ Worker.status uploaded == 200 && body == "{\"id\":1}" && Worker.status rejected == 415
+      && Worker.status served == 200 && Worker.status missing == 404 && (map _.images posted == Right [ 1 ])
 
   log "All tests passed."
 
@@ -279,6 +335,7 @@ describe = case _ of
   Garbled why -> "garbled " <> why
   Delivered event -> event # match
     { message: \m -> "message " <> m.text
+    , updated: \m -> "updated " <> show (m.reactions <#> \r -> r.emoji <> "×" <> show (Array.length r.by))
     , joined: ("joined " <> _)
     , left: ("left " <> _)
     , typing: ("typing " <> _)

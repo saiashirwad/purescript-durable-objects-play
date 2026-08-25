@@ -9,6 +9,8 @@ module Cloudflare.Worker
   , WorkerInit
   , WorkerRef
   , body
+  , bodyBase64
+  , bytes
   , cookie
   , guard
   , header
@@ -22,6 +24,7 @@ module Cloudflare.Worker
   , rebase
   , ref
   , requestTo
+  , requestWith
   , responseText
   , status
   , route
@@ -71,6 +74,9 @@ foreign import cookieImpl :: Request -> String -> Nullable String
 foreign import textWith :: Int -> Array { name :: String, value :: String } -> String -> Response
 foreign import sha256Impl :: String -> Effect (Promise String)
 foreign import requestTo :: String -> Request
+foreign import requestWith :: { url :: String, method :: String, contentType :: String, base64 :: String } -> Request
+foreign import bodyBase64Impl :: Request -> Effect (Promise String)
+foreign import bytes :: Int -> String -> String -> Response
 foreign import status :: Response -> Int
 foreign import responseTextImpl :: Response -> Effect (Promise String)
 foreign import variableImpl :: Foreign -> String -> Effect String
@@ -96,6 +102,10 @@ body = toAffE <<< bodyImpl
 
 responseText :: Response -> Aff String
 responseText = toAffE <<< responseTextImpl
+
+-- | The request body, base64.
+bodyBase64 :: Request -> Aff String
+bodyBase64 = toAffE <<< bodyBase64Impl
 
 header :: Request -> String -> Maybe String
 header request = toMaybe <<< headerImpl request

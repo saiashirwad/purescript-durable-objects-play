@@ -64,3 +64,26 @@ export const text = (status) => (body) =>
   });
 
 export const json = (status) => (body) => Response.json(body, { status });
+
+// Base64 without Buffer, so it runs in workerd and browsers alike.
+const toBase64 = (buffer) => {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+};
+
+const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+
+export const bodyBase64Impl = (request) => () => request.arrayBuffer().then(toBase64);
+
+export const bytes = (status) => (mime) => (base64) =>
+  new Response(fromBase64(base64), {
+    status,
+    headers: { "content-type": mime, "cache-control": "private, max-age=31536000, immutable" },
+  });
+
+export const requestWith = ({ url, method, contentType, base64 }) =>
+  new Request(url, { method, headers: { "content-type": contentType }, body: fromBase64(base64) });

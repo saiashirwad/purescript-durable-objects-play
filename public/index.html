@@ -159,6 +159,68 @@
       .empty-title { font-weight: 600; }
       @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
+      /* Message content */
+      .stack { display: flex; flex-direction: column; min-width: 0; position: relative; }
+      .bubble p + p, .bubble blockquote, .bubble ul, .bubble pre, .bubble h2, .bubble h3, .bubble h4 { margin-top: 0.35rem; }
+      .bubble h2, .bubble h3, .bubble h4 { margin: 0.3rem 0 0.1rem; font-size: 1rem; }
+      .bubble ul { margin: 0.2rem 0 0 1.1rem; padding: 0; }
+      .bubble blockquote { margin: 0.3rem 0; padding-left: 0.6rem; border-left: 2px solid currentColor; opacity: 0.8; }
+      .bubble pre { margin: 0.35rem 0; padding: 0.5rem 0.65rem; border-radius: 0.5rem; background: rgba(0, 0, 0, 0.08); overflow-x: auto; font-size: 0.8rem; }
+      .bubble code { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: 0.85em; }
+      .bubble p code { padding: 0.05rem 0.3rem; border-radius: 0.3rem; background: rgba(0, 0, 0, 0.08); }
+      .mine .bubble pre, .mine .bubble p code { background: rgba(255, 255, 255, 0.18); }
+      .bubble a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+      .mention { font-weight: 600; color: var(--accent); }
+      .mine .mention { color: inherit; }
+      .mention.me { background: rgba(247, 183, 51, 0.25); border-radius: 0.3rem; padding: 0 0.2rem; }
+      .messages li.mentioned .bubble { box-shadow: 0 0 0 2px rgba(247, 183, 51, 0.6), var(--bubble-shadow); }
+      .image { display: block; margin-top: 0.4rem; }
+      .image img { max-width: min(100%, 24rem); max-height: 20rem; border-radius: 0.6rem; display: block; }
+      .quote {
+        display: grid; text-align: left; gap: 0.05rem; margin: 0 0 0.35rem; padding: 0.3rem 0.6rem; border-radius: 0.5rem;
+        border-left: 3px solid var(--accent); background: rgba(0, 0, 0, 0.06); font-size: 0.8rem; cursor: pointer;
+      }
+      .mine .quote { background: rgba(255, 255, 255, 0.18); border-left-color: rgba(255, 255, 255, 0.7); }
+      .quote-author { font-weight: 600; }
+      .quote-text { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .mine .quote-text { color: inherit; opacity: 0.85; }
+      .messages li.flash .bubble { animation: flash 1.2s ease; }
+      @keyframes flash { 0%, 60% { box-shadow: 0 0 0 3px var(--ring); } 100% { box-shadow: var(--bubble-shadow); } }
+
+      /* Reactions and hover bar */
+      .reactions { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+      .mine .reactions { justify-content: flex-end; }
+      .reaction {
+        display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.1rem 0.5rem; font-size: 0.8rem;
+        background: var(--surface-solid); border: 1px solid var(--line); border-radius: 999px;
+      }
+      .reaction.mine { border-color: var(--accent); background: rgba(59, 108, 240, 0.12); }
+      .reaction .count { color: var(--muted); font-size: 0.7rem; }
+      .hover-bar {
+        position: absolute; top: -0.9rem; right: 0.5rem; display: none; gap: 0.1rem; padding: 0.1rem;
+        background: var(--surface-solid); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--bubble-shadow);
+      }
+      .mine .hover-bar { right: auto; left: 0.5rem; }
+      .hover-bar button { padding: 0.15rem 0.4rem; font-size: 0.9rem; }
+      .hover-bar svg { width: 0.9rem; height: 0.9rem; }
+      .messages li:hover .hover-bar { display: inline-flex; }
+
+      /* Composer extras */
+      .reply-chip, .attachments, .suggest { display: flex; align-items: center; gap: 0.5rem; margin: 0 0.5rem 0.5rem; font-size: 0.85rem; }
+      .reply-chip { color: var(--muted); padding: 0.3rem 0.6rem; border-left: 3px solid var(--accent); background: var(--line); border-radius: 0.4rem; }
+      .reply-chip svg { width: 0.9rem; height: 0.9rem; flex: none; }
+      .reply-chip span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .attachment { position: relative; display: inline-flex; }
+      .attachment img { height: 3.5rem; border-radius: 0.5rem; border: 1px solid var(--line); }
+      .attachment button { position: absolute; top: -0.5rem; right: -0.5rem; width: 1.3rem; height: 1.3rem; padding: 0; background: var(--surface-solid); border: 1px solid var(--line); }
+      .attachment.uploading { padding: 1rem; color: var(--muted); }
+      .suggest { flex-wrap: wrap; }
+      .suggest button { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid var(--line); background: var(--surface-solid); }
+      .suggest .avatar { width: 1.3rem; height: 1.3rem; font-size: 0.6rem; }
+      .attach { color: var(--muted); }
+      .attach svg { width: 1.2rem; height: 1.2rem; }
+      .composer { padding-left: 0.5rem; }
+
       footer {
         padding: 0.75rem clamp(1rem, 3vw, 2.5rem) calc(1rem + env(safe-area-inset-bottom));
         background: var(--surface); backdrop-filter: blur(16px) saturate(1.4); -webkit-backdrop-filter: blur(16px) saturate(1.4);

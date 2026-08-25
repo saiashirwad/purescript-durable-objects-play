@@ -42,6 +42,7 @@ package:
     - web-events
     - web-html
     - web-storage
+    - web-uievents
   test:
     main: Test.Main
     dependencies:
