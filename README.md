@@ -126,8 +126,15 @@ Simulator.advance clock (Milliseconds 1000.0)
 
 ```sh
 npm install
-npm run dev      # chat at localhost:8787, counter at /counter.html
-spago test       # same objects, in-memory simulator
+npm run dev       # chat at localhost:8787, counter at /counter.html
+npm run build:ui  # build the UI library
+npm run test:ui   # test style rules and keyboard state
+npm run test:e2e  # test pages in Chrome with axe
+spago test        # same objects, in-memory simulator
 ```
 
 Library in `src/Cloudflare/`, agents in `src/Ai/`, chat in `src/Chat/`, pages in `src/Frontend/`.
+
+The UI library is a separate local package in `ui/`. Open `/ui.html` during
+local development to see its component lab. See `ui/README.md` for its API,
+theme model, accessibility rules, and package split plan.

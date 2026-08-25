@@ -7,7 +7,12 @@ output/
 # Generated
 public/chat.js
 public/counter.js
+public/ui-lab.js
+public/ui.css
+public/chat.css
 wrangler.jsonc
+test-results/
+playwright-report/
 
 # Node
 node_modules/

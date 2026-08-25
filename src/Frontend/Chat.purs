@@ -13,21 +13,21 @@ import Chat.Room.Live (assistantName)
 import Cloudflare.Durable (Signal(..))
 import Cloudflare.Durable.Rpc as Rpc
 import Control.Promise (Promise, toAffE)
-import Data.Array (elem, filter, last, length, take, zip)
+import Data.Array (elem, filter, last, length, mapWithIndex, replicate, take, zip)
 import Data.Array as Array
 import Data.DateTime.Instant (unInstant)
 import Data.Either (Either(..), either)
-import Data.Enum (fromEnum)
-import Data.Foldable (traverse_)
-import Data.Traversable (traverse)
+import Data.Foldable (fold, foldMap, traverse_)
 import Data.Lens (Lens', Prism', over, preview, prism')
 import Data.Lens.Record (prop)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
+import Data.Monoid (guard)
 import Data.Newtype (unwrap)
 import Data.String (Pattern(..), drop, joinWith, null, split, stripPrefix, trim)
 import Data.String as String
+import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Data.Variant (Variant, match)
 import Effect (Effect)
@@ -35,14 +35,24 @@ import Effect.Aff (attempt, message)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Effect.Class (liftEffect)
 import Effect.Now (now)
+import Frontend.Chat.Style (styles)
 import Halogen as H
 import Halogen.Aff as HA
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
+import Halogen.HTML.Properties.ARIA as ARIA
 import Halogen.Subscription (makeEmitter)
 import Halogen.VDom.Driver (runUI)
 import Type.Proxy (Proxy(..))
+import UI.Avatar as Avatar
+import UI.Button as Button
+import UI.Core (Size(..), Tone(..), dataAttr)
+import UI.Field as Field
+import UI.Icon as Icon
+import UI.Input as Input
+import UI.Status as Status
+import UI.Style (Style, css)
 import Web.Event.Event (Event, EventType(..), preventDefault)
 import Web.HTML (window)
 import Web.HTML.HTMLElement (HTMLElement, focus)
@@ -170,6 +180,7 @@ page = H.mkComponent
   , eval: H.mkEval H.defaultEval { handleAction = handleAction, initialize = Just Initialize }
   }
 
+-- | The room scrolls as a whole, so this sits on `main`.
 messagesRef :: H.RefLabel
 messagesRef = H.RefLabel "messages"
 
@@ -194,66 +205,88 @@ render st = case st.view of
   Joining joining -> joiningView joining
   InRoom r -> roomView st r
 
+-- Button presets.
+
+small :: Button.Options
+small = Button.defaults { size = Small }
+
+quiet :: Button.Options
+quiet = small { tone = Quiet }
+
+primary :: Button.Options
+primary = Button.defaults { tone = Accent, styles = styles.wide }
+
+-- | One card, centered.
+screen :: forall m. Html m -> Html m
+screen = HH.main [ css styles.screen ] <<< pure
+
 lockedView :: forall m. Locked -> Html m
-lockedView { passkey, error, busy } =
-  HH.main [ cls "centered" ]
-    [ HH.form [ cls "card", HE.onSubmit Unlock ]
-        [ HH.h1_ [ HH.text "Passkey" ]
-        , HH.p [ cls "hint" ] [ HH.text "This chat is private. Enter the passkey to continue." ]
-        , HH.input [ HP.type_ HP.InputPassword, HP.placeholder "Passkey", HP.autofocus true, HP.value passkey, HE.onValueInput SetPasskey ]
-        , HH.button [ cls "primary", HP.type_ HP.ButtonSubmit, HP.disabled (busy || null (trim passkey)) ]
-            [ HH.text if busy then "Checking…" else "Unlock" ]
-        , errorLine error
-        ]
+lockedView { passkey, error, busy } = screen $
+  HH.form [ css styles.card, HE.onSubmit Unlock ]
+    [ HH.h1 [ css styles.title ] [ HH.text "Passkey" ]
+    , HH.p [ css styles.lead ] [ HH.text "This chat is private. Enter the passkey to continue." ]
+    , Field.password field
+        [ HP.placeholder "Enter the passkey", HP.autofocus true, HP.value passkey, HE.onValueInput SetPasskey ]
+    , Button.submit (primary { disabled = busy || blank passkey, busy = busy }) []
+        [ HH.text if busy then "Checking…" else "Unlock" ]
     ]
+  where
+  field = (Field.defaults "chat-passkey" "Passkey") { error = error, required = true, disabled = busy }
 
 lobbyView :: forall m. { busy :: Boolean } -> Html m
-lobbyView { busy } =
-  HH.main [ cls "centered" ]
-    [ HH.div [ cls "card" ]
-        [ HH.h1_ [ HH.text "Chat" ]
-        , HH.p [ cls "hint" ] [ HH.text "Each room is one Durable Object. Its id is the link; anyone who has it can talk." ]
-        , HH.button [ cls "primary", HP.disabled busy, HE.onClick \_ -> CreateRoom ]
-            [ HH.text if busy then "Creating…" else "Create a room" ]
-        ]
+lobbyView { busy } = screen $
+  HH.div [ css styles.card ]
+    [ HH.h1 [ css styles.title ] [ HH.text "Chat" ]
+    , HH.p [ css styles.lead ] [ HH.text "Each room is one Durable Object. Its id is the link; anyone who has it can talk." ]
+    , Button.button (primary { busy = busy }) [ HE.onClick \_ -> CreateRoom ]
+        [ HH.text if busy then "Creating…" else "Create a room" ]
     ]
 
 joiningView :: forall m. Joining -> Html m
-joiningView { name } =
-  HH.main [ cls "centered" ]
-    [ HH.form [ cls "card", HE.onSubmit SubmitName ]
-        [ HH.h1_ [ HH.text "Who are you?" ]
-        , HH.p [ cls "hint" ] [ HH.text "The name others will see in this room." ]
-        , HH.input [ HP.placeholder "Your name", HP.autofocus true, HP.value name, HE.onValueInput SetName ]
-        , HH.button [ cls "primary", HP.type_ HP.ButtonSubmit, HP.disabled (null (trim name)) ] [ HH.text "Join" ]
-        ]
+joiningView { name } = screen $
+  HH.form [ css styles.card, HE.onSubmit SubmitName ]
+    [ HH.h1 [ css styles.title ] [ HH.text "Who are you?" ]
+    , HH.p [ css styles.lead ] [ HH.text "The name others will see in this room." ]
+    , Field.input ((Field.defaults "chat-name" "Your name") { required = true })
+        [ HP.placeholder "Your name", HP.autofocus true, HP.value name, HE.onValueInput SetName ]
+    , Button.submit (primary { disabled = blank name }) [] [ HH.text "Join" ]
     ]
 
 roomView :: forall m. State -> RoomView -> Html m
 roomView st r =
-  HH.main [ cls "room" ]
-    [ roomHeader st r
+  HH.main [ css styles.room, HP.ref messagesRef ]
+    [ HH.header [ css styles.header ]
+        [ roomTitle st r
+        , roomPeople st r
+        ]
     , messageList st.author r
     , composer st.author r
     ]
 
-roomHeader :: forall m. State -> RoomView -> Html m
-roomHeader { author, notifications } r =
-  HH.header_
-    [ HH.div [ cls "room-title" ]
-        [ HH.span [ cls if r.online then "dot online" else "dot" ] []
-        , HH.h1_ [ HH.text "Room" ]
-        , HH.code [ cls "room-id", HP.title (Chat.printRoomId r.id) ] [ HH.text $ shortId r.id ]
-        , HH.span [ cls "hint online-count" ] [ HH.text $ onlineLabel r ]
-        , HH.button [ cls "chip", HE.onClick \_ -> CopyLink ] [ linkIcon, HH.text if r.copied then "Copied" else "Copy link" ]
-        , if notifications == "default" then HH.button [ cls "chip", HE.onClick \_ -> EnableNotifications ] [ bellIcon, HH.text "Notify me" ]
-          else HH.text ""
-        ]
-    , HH.div [ cls "room-actions" ]
-        [ HH.div [ cls "members", HP.title (joinWith ", " r.members) ] (avatar <$> r.members)
-        , HH.button [ cls "identity", HP.title "Change name", HE.onClick \_ -> ChangeName ] [ avatar author, HH.span_ [ HH.text author ] ]
-        , HH.button [ cls "quiet", HE.onClick \_ -> Leave ] [ HH.text "Leave" ]
-        ]
+-- | Presence, the room's name and short id, and the two share buttons.
+roomTitle :: forall m. State -> RoomView -> Html m
+roomTitle { notifications } r =
+  HH.div [ css styles.headerGroup ] $
+    [ HH.span [ css $ styles.presence <> guard r.online styles.online, ARIA.hidden "true" ] []
+    , HH.h1 [ css styles.roomName ] [ HH.text "Room" ]
+    , HH.code [ css styles.roomId, HP.title (Chat.printRoomId r.id) ] [ HH.text $ shortId r.id ]
+    , HH.span [ css styles.count, ARIA.role "status", ARIA.live "polite" ] [ HH.text $ onlineLabel r ]
+    , Button.button small [ HE.onClick \_ -> CopyLink ]
+        [ Icon.render linkIcon, HH.text if r.copied then "Copied" else "Copy link" ]
+    ] <> guard (notifications == "default")
+      [ Button.button small [ HE.onClick \_ -> EnableNotifications ]
+          [ Icon.render bellIcon, HH.text "Notify me" ]
+      ]
+
+-- | Who is here, who you are, and the way out.
+roomPeople :: forall m. State -> RoomView -> Html m
+roomPeople { author } r =
+  HH.div [ css styles.headerGroup ]
+    [ HH.div [ css styles.members, ARIA.label $ "People online: " <> joinWith ", " r.members ] $
+        r.members # mapWithIndex \i -> avatar $ styles.member <> guard (i > 0) styles.overlap
+    , Button.button (quiet { styles = styles.identity }) [ HP.title "Change name", HE.onClick \_ -> ChangeName ]
+        [ avatar mempty author, HH.span_ [ HH.text author ] ]
+    , Button.button quiet [ HE.onClick \_ -> Leave ] [ HH.text "Leave" ]
     ]
 
 onlineLabel :: RoomView -> String
@@ -265,95 +298,113 @@ onlineLabel r
 
 messageList :: forall m. String -> RoomView -> Html m
 messageList author r =
-  HH.ol [ cls "messages", HP.ref messagesRef ]
+  HH.ol [ css styles.list, ARIA.label "Messages" ]
     if Map.isEmpty r.messages then [ emptyRoom ]
     else messageItem author r <$> threaded (Array.fromFoldable r.messages)
 
 emptyRoom :: forall m. Html m
 emptyRoom =
-  HH.li [ cls "empty" ]
-    [ HH.p [ cls "empty-title" ] [ HH.text "It's quiet in here" ]
-    , HH.p [ cls "hint" ] [ HH.text "Share the link and say hello." ]
+  HH.li [ css $ styles.message <> styles.empty ]
+    [ HH.p [ css styles.emptyTitle ] [ HH.text "It's quiet in here" ]
+    , HH.p [ css styles.muted ] [ HH.text "Share the link and say hello." ]
     ]
 
--- | One bubble: quoted reply, markdown body, images, reactions, and a hover
--- | bar to react or reply. `continued` hides the avatar and name.
+-- | One message: avatar, bubble, reactions, and a bar that shows on hover.
+-- | `continued` means the same author just spoke, so no avatar or name.
 messageItem :: forall m. String -> RoomView -> Tuple Boolean Message -> Html m
 messageItem author r (Tuple continued m) =
   HH.li
-    [ HP.id ("msg-" <> show m.id)
-    , HP.classes $ HH.ClassName <$>
-        [ side ] <> flag continued "continued" <> flag bot "bot" <> flag mentioned "mentioned"
+    [ HP.id $ "msg-" <> show m.id
+    , css $ styles.message <> guard mine styles.mine <> guard continued styles.continued
+    , dataAttr "ui" "message"
     ]
-    [ if headless then HH.span [ cls "gutter" ] [] else avatar m.author
-    , HH.div [ cls "stack" ]
-        [ HH.div [ cls "bubble" ] $
-            (if headless then [] else [ HH.span [ cls "author" ] [ HH.text m.author ] ])
-              <> quoted
-              <> markdown author m.text
-              <> (m.images <#> \n -> HH.a [ HP.href (imageUrl r.id n), HP.target "_blank", cls "image" ] [ HH.img [ HP.src (imageUrl r.id n), HP.alt "attached image" ] ])
-              <> [ HH.span [ cls "time" ] [ HH.text $ formatTime m.sentAt ] ]
-        , reactions
-        , HH.div [ cls "hover-bar" ] $
-            (quickEmojis <#> \e -> HH.button [ cls "quiet", HP.title e, HE.onClick \_ -> React m.id e ] [ HH.text e ])
-              <> [ HH.button [ cls "quiet", HP.title "Reply", HE.onClick \_ -> Reply (Just m.id) ] [ replyIcon ] ]
-        ]
-    ]
+    $ guard (not mine) [ if continued then HH.span [ css styles.gutter, ARIA.hidden "true" ] [] else avatar (guard bot styles.botAvatar) m.author ]
+        <> [ HH.div [ css styles.stack ] [ bubble, reactions, actions ] ]
   where
   mine = m.author == author
   bot = m.author == assistantName
   mentioned = author `elem` m.mentions
-  side = if mine then "mine" else "theirs"
   headless = mine || continued
-  flag b c = if b then [ c ] else []
 
-  quoted = case m.replyTo >>= \id -> Map.lookup id r.messages of
-    Nothing -> []
-    Just parent ->
-      [ HH.button [ cls "quote", HE.onClick \_ -> JumpTo parent.id ]
-          [ HH.span [ cls "quote-author" ] [ HH.text parent.author ]
-          , HH.span [ cls "quote-text" ] [ HH.text $ String.take 120 $ Markdown.plain parent.text ]
-          ]
+  bubble = HH.div [ css bubbleStyle ] $ fold
+    [ guard (not headless) [ HH.span [ css styles.author ] [ HH.text m.author ] ]
+    , foldMap (pure <<< quote) $ m.replyTo >>= \id -> Map.lookup id r.messages
+    , markdown author mine m.text
+    , image <$> m.images
+    , [ HH.span [ css styles.time ] [ HH.text $ formatTime m.sentAt ] ]
+    ]
+
+  bubbleStyle = fold
+    [ styles.bubble
+    , if mine then styles.mineBubble else styles.theirsBubble
+    , guard (continued && mine) styles.mineJoined
+    , guard (continued && not mine) styles.theirsJoined
+    , guard bot styles.botBubble
+    , guard mentioned styles.mentionedBubble
+    ]
+
+  quote parent =
+    Button.button (quiet { styles = styles.quote <> guard mine styles.mineQuote }) [ HE.onClick \_ -> JumpTo parent.id ]
+      [ HH.span [ css styles.quoteAuthor ] [ HH.text parent.author ]
+      , HH.span [ css $ styles.quoteText <> guard mine styles.mineQuoteText ]
+          [ HH.text $ String.take 120 $ Markdown.plain parent.text ]
       ]
 
-  reactions =
-    if m.reactions == [] then HH.text ""
-    else HH.div [ cls "reactions" ] $ m.reactions <#> \{ emoji, by } ->
-      HH.button
-        [ cls (if author `elem` by then "reaction mine" else "reaction"), HP.title (joinWith ", " by), HE.onClick \_ -> React m.id emoji ]
-        [ HH.text emoji, HH.span [ cls "count" ] [ HH.text $ show (length by) ] ]
+  image n =
+    HH.a [ css styles.imageLink, HP.href (imageUrl r.id n), HP.target "_blank", HP.rel "noopener noreferrer" ]
+      [ HH.img [ css styles.image, HP.src (imageUrl r.id n), HP.alt $ m.author <> " attached an image" ] ]
+
+  reactions
+    | Array.null m.reactions = HH.text ""
+    | otherwise = HH.div [ css $ styles.reactions <> guard mine styles.mineReactions ] $ m.reactions <#> \{ emoji, by } ->
+        Button.button (quiet { styles = styles.reaction <> guard (author `elem` by) styles.activeReaction })
+          [ HP.title (joinWith ", " by), HE.onClick \_ -> React m.id emoji ]
+          [ HH.text emoji, HH.span [ css styles.reactionCount ] [ HH.text $ show (length by) ] ]
+
+  actions =
+    HH.div [ css $ styles.actions <> guard mine styles.mineActions, ARIA.label $ "Actions for " <> m.author <> "'s message", dataAttr "ui" "actions" ] $
+      (quickEmojis <#> \emoji -> Button.iconButton ("React with " <> emoji) tiny [ HP.title emoji, HE.onClick \_ -> React m.id emoji ] [ HH.text emoji ])
+        <> [ Button.iconButton "Reply" tiny [ HP.title "Reply", HE.onClick \_ -> Reply (Just m.id) ] [ Icon.render replyIcon ] ]
+  tiny = quiet { styles = styles.actionButton }
 
 quickEmojis :: Array String
 quickEmojis = [ "👍", "❤️", "😂", "🎉", "👀" ]
 
 -- | Markdown to Halogen, with mentions of the reader marked.
-markdown :: forall m. String -> String -> Array (Html m)
-markdown me = map block <<< Markdown.parse
+markdown :: forall m. String -> Boolean -> String -> Array (Html m)
+markdown me mine = map block <<< Markdown.parse
   where
   block = case _ of
-    Paragraph xs -> HH.p_ (inline <$> xs)
-    Heading 1 xs -> HH.h2_ (inline <$> xs)
-    Heading 2 xs -> HH.h3_ (inline <$> xs)
-    Heading _ xs -> HH.h4_ (inline <$> xs)
-    Quote bs -> HH.blockquote_ (block <$> bs)
-    Bullets items -> HH.ul_ (items <#> \xs -> HH.li_ (inline <$> xs))
-    Code _ body -> HH.pre_ [ HH.code_ [ HH.text body ] ]
+    Paragraph xs -> HH.p [ css styles.paragraph ] (inline <$> xs)
+    Heading 1 xs -> HH.h2 [ css styles.subheading ] (inline <$> xs)
+    Heading 2 xs -> HH.h3 [ css styles.subheading ] (inline <$> xs)
+    Heading _ xs -> HH.h4 [ css styles.subheading ] (inline <$> xs)
+    Quote bs -> HH.blockquote [ css styles.blockquote ] (block <$> bs)
+    Bullets items -> HH.ul [ css styles.bullets ] (items <#> HH.li_ <<< map inline)
+    Code _ body -> HH.pre [ css styles.codeBlock ] [ HH.code_ [ HH.text body ] ]
   inline = case _ of
     Text s -> HH.text s
     Bold xs -> HH.strong_ (inline <$> xs)
     Italic xs -> HH.em_ (inline <$> xs)
-    InlineCode s -> HH.code_ [ HH.text s ]
+    InlineCode s -> HH.code [ css styles.inlineCode ] [ HH.text s ]
     Link { text, url }
-      | safe url -> HH.a [ HP.href url, HP.target "_blank", HP.rel "noopener noreferrer" ] [ HH.text text ]
+      | safe url -> HH.a [ css styles.link, HP.href url, HP.target "_blank", HP.rel "noopener noreferrer" ] [ HH.text text ]
       | otherwise -> HH.text text
-    Mention name -> HH.span [ cls (if name == me then "mention me" else "mention") ] [ HH.text $ "@" <> name ]
-  safe url = Array.any (\scheme -> isJust (stripPrefix (Pattern scheme) url)) [ "https://", "http://", "mailto:" ]
+    Mention name ->
+      HH.span [ css $ styles.mention <> guard mine styles.mineMention <> guard (name == me) styles.selfMention ]
+        [ HH.text $ "@" <> name ]
+  safe url = Array.any (\scheme -> isJust $ stripPrefix (Pattern scheme) url) [ "https://", "http://", "mailto:" ]
 
 -- | "ann is typing", "ann and bob are typing", or "several people are typing".
 typingLine :: forall m. RoomView -> Html m
 typingLine r =
-  HH.div [ cls if Map.isEmpty r.typing then "typing" else "typing visible" ]
-    [ HH.span [ cls "dots" ] [ HH.i_ [], HH.i_ [], HH.i_ [] ]
+  HH.div
+    [ css $ styles.typing <> guard (not $ Map.isEmpty r.typing) styles.typingVisible
+    , ARIA.role "status"
+    , ARIA.live "polite"
+    , ARIA.atomic "true"
+    ]
+    [ HH.span [ css styles.dots, ARIA.hidden "true", dataAttr "ui" "dots" ] $ replicate 3 $ HH.i [ css styles.dot ] []
     , HH.span_ [ HH.text $ who $ Array.fromFoldable $ Map.keys r.typing ]
     ]
   where
@@ -374,17 +425,17 @@ suggestions author r = case last (split (Pattern " ") r.draft) >>= stripPrefix (
 
 composer :: forall m. String -> RoomView -> Html m
 composer author r =
-  HH.footer_
+  HH.footer [ css styles.footer ]
     [ typingLine r
     , replyChip r
     , attachmentStrip r
-    , case suggestions author r of
-        [] -> HH.text ""
-        names -> HH.div [ cls "suggest" ] $ names <#> \n -> HH.button [ cls "quiet", HE.onClick \_ -> PickMention n ] [ avatar n, HH.text n ]
-    , HH.form [ cls "composer", HE.onSubmit Submit ]
-        [ HH.button [ cls "quiet attach", HP.type_ HP.ButtonButton, HP.title "Attach image", HE.onClick \_ -> Attach ] [ imageIcon ]
-        , HH.input
+    , suggestionBar author r
+    , HH.form [ css styles.composer, HE.onSubmit Submit, dataAttr "ui" "composer" ]
+        [ Button.iconButton "Attach image" (Button.defaults { tone = Quiet }) [ HP.title "Attach image", HE.onClick \_ -> Attach ]
+            [ Icon.styled styles.largeIcon imageIcon ]
+        , Input.text (Input.defaults { disabled = r.sending, styles = styles.input })
             [ HP.placeholder $ "Message · @" <> assistantName <> " to ask the assistant · markdown ok"
+            , ARIA.label "Message"
             , HP.autofocus true
             , HP.autocomplete HP.AutocompleteOff
             , HP.value r.draft
@@ -393,75 +444,88 @@ composer author r =
             , HE.onKeyDown KeyDown
             , HE.handler (EventType "paste") Pasted
             ]
-        , HH.button
-            [ cls "send", HP.type_ HP.ButtonSubmit, HP.title "Send", HP.disabled (r.sending || r.uploading || not (sendable r)) ]
-            [ sendIcon ]
+        , Button.submit
+            (Button.defaults { tone = Accent, disabled = r.sending || r.uploading || not (sendable r), busy = r.sending, styles = styles.send })
+            [ HP.title "Send", ARIA.label "Send" ]
+            [ Icon.render sendIcon ]
         ]
     , errorLine r.error
     ]
 
 sendable :: RoomView -> Boolean
-sendable r = not (null (trim r.draft)) || r.attachments /= []
+sendable r = not (blank r.draft) || not (Array.null r.attachments)
+
+suggestionBar :: forall m. String -> RoomView -> Html m
+suggestionBar author r = case suggestions author r of
+  [] -> HH.text ""
+  names -> HH.div [ css styles.suggestions, ARIA.label "Mention suggestions" ] $ names <#> \name ->
+    Button.button (quiet { styles = styles.suggestion }) [ HE.onClick \_ -> PickMention name ]
+      [ avatar styles.compactAvatar name, HH.text name ]
 
 replyChip :: forall m. RoomView -> Html m
 replyChip r = case r.replyTo >>= \id -> Map.lookup id r.messages of
   Nothing -> HH.text ""
   Just parent ->
-    HH.div [ cls "reply-chip" ]
-      [ replyIcon
-      , HH.span_ [ HH.text $ "Replying to ", HH.strong_ [ HH.text parent.author ], HH.text $ ": " <> String.take 60 (Markdown.plain parent.text) ]
-      , HH.button [ cls "quiet", HP.title "Cancel", HE.onClick \_ -> Reply Nothing ] [ HH.text "×" ]
+    HH.div [ css styles.replyChip ]
+      [ Icon.render replyIcon
+      , HH.span [ css styles.replyChipText ]
+          [ HH.text "Replying to ", HH.strong_ [ HH.text parent.author ], HH.text $ ": " <> String.take 60 (Markdown.plain parent.text) ]
+      , Button.iconButton "Cancel reply" quiet [ HP.title "Cancel", HE.onClick \_ -> Reply Nothing ] [ HH.text "×" ]
       ]
 
 attachmentStrip :: forall m. RoomView -> Html m
 attachmentStrip r
-  | r.attachments == [] && not r.uploading = HH.text ""
-  | otherwise = HH.div [ cls "attachments" ] $
-      (r.attachments <#> \n -> HH.span [ cls "attachment" ] [ HH.img [ HP.src (imageUrl r.id n) ], HH.button [ cls "quiet", HE.onClick \_ -> Detach n ] [ HH.text "×" ] ])
-        <> (if r.uploading then [ HH.span [ cls "attachment uploading" ] [ HH.text "…" ] ] else [])
+  | Array.null r.attachments && not r.uploading = HH.text ""
+  | otherwise =
+      HH.div [ css styles.attachments, ARIA.label "Image attachments" ] $
+        (thumbnail <$> r.attachments)
+          <> guard r.uploading [ HH.span [ css styles.uploading, ARIA.role "status" ] [ HH.text "Uploading an image…" ] ]
+      where
+      thumbnail n = HH.span [ css styles.attachment ]
+        [ HH.img [ css styles.thumbnail, HP.src (imageUrl r.id n), HP.alt "Image attachment preview" ]
+        , Button.iconButton ("Remove attachment " <> show n) (small { styles = styles.remove }) [ HE.onClick \_ -> Detach n ] [ HH.text "×" ]
+        ]
 
 errorLine :: forall m. Maybe String -> Html m
-errorLine = maybe (HH.text "") \why -> HH.p [ cls "error" ] [ HH.text why ]
+errorLine = maybe (HH.text "") \why -> Status.error [ HH.text why ]
 
-avatar :: forall w i. String -> HH.HTML w i
-avatar name = HH.span [ cls (if name == assistantName then "avatar bot" else "avatar"), HP.style ("--hue: " <> show (hue name)) ]
-  [ HH.text if name == assistantName then "✦" else String.toUpper $ String.take 1 name ]
-  where
-  hue = String.toCodePointArray >>> map fromEnum >>> Array.foldl (\h c -> (h * 31 + c) `mod` 360) 7
+avatar :: forall w i. Style -> String -> HH.HTML w i
+avatar extra name = Avatar.avatar
+  { fallback: if name == assistantName then "✦" else String.toUpper $ String.take 1 name
+  , hue: Avatar.hue name
+  , styles: extra
+  }
 
 shortId :: RoomId -> String
-shortId id = let s = Chat.printRoomId id in String.take 6 s <> "…" <> String.drop (String.length s - 4) s
-
-icon :: forall w i. Array String -> HH.HTML w i
-icon paths = HH.elementNS svgNs (HH.ElemName "svg")
-  [ HP.attr (HH.AttrName "viewBox") "0 0 24 24", HP.attr (HH.AttrName "aria-hidden") "true" ]
-  (paths <#> \d -> HH.elementNS svgNs (HH.ElemName "path") [ HP.attr (HH.AttrName "d") d ] [])
+shortId id = String.take 6 s <> "…" <> String.drop (String.length s - 4) s
   where
-  svgNs = HH.Namespace "http://www.w3.org/2000/svg"
+  s = Chat.printRoomId id
 
-linkIcon :: forall w i. HH.HTML w i
-linkIcon = icon [ "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7", "M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" ]
-
-bellIcon :: forall w i. HH.HTML w i
-bellIcon = icon [ "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.94 1.94 0 0 0 3.4 0" ]
-
-sendIcon :: forall w i. HH.HTML w i
-sendIcon = icon [ "M12 19V5", "m5 12 7-7 7 7" ]
-
-replyIcon :: forall w i. HH.HTML w i
-replyIcon = icon [ "M9 17 4 12l5-5", "M20 18v-2a4 4 0 0 0-4-4H4" ]
-
-imageIcon :: forall w i. HH.HTML w i
-imageIcon = icon [ "M3 5h18v14H3z", "m3 15 5-5 4 4 3-3 6 6", "M16 8h.01" ]
-
-cls :: forall r i. String -> HH.IProp (class :: String | r) i
-cls = HP.class_ <<< HH.ClassName
+blank :: String -> Boolean
+blank = null <<< trim
 
 -- | Pair each message with whether it continues the previous author's run.
 threaded :: Array Message -> Array (Tuple Boolean Message)
 threaded messages = zip ([ false ] <> (continues <$> zip messages (Array.drop 1 messages))) messages
   where
   continues (Tuple previous next) = previous.author == next.author && next.sentAt - previous.sentAt < 300000.0 && next.replyTo == Nothing
+
+-- Icons: paths on a 24×24 grid.
+
+linkIcon :: Icon.Icon
+linkIcon = Icon.icon [ "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7", "M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" ]
+
+bellIcon :: Icon.Icon
+bellIcon = Icon.icon [ "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.94 1.94 0 0 0 3.4 0" ]
+
+sendIcon :: Icon.Icon
+sendIcon = Icon.icon [ "M12 19V5", "m5 12 7-7 7 7" ]
+
+replyIcon :: Icon.Icon
+replyIcon = Icon.icon [ "M9 17 4 12l5-5", "M20 18v-2a4 4 0 0 0-4-4H4" ]
+
+imageIcon :: Icon.Icon
+imageIcon = Icon.icon [ "M3 5h18v14H3z", "m3 15 5-5 4 4 3-3 6 6", "M16 8h.01" ]
 
 -- Actions ------------------------------------------------------------------
 
@@ -493,12 +557,12 @@ handleAction = case _ of
   Enter id -> do
     liftEffect $ Location.setHash (Chat.printRoomId id) =<< location
     { author } <- H.get
-    if null (trim author) then H.modify_ _ { view = Joining { id, name: "" } }
+    if blank author then H.modify_ _ { view = Joining { id, name: "" } }
     else handleAction $ Join id
   SetName name -> H.modify_ $ over (_view <<< _Joining) _ { name = name }
   SubmitName event -> do
     liftEffect $ preventDefault event
-    H.gets (preview (_view <<< _Joining)) >>= traverse_ \{ id, name } -> unless (null (trim name)) do
+    H.gets (preview (_view <<< _Joining)) >>= traverse_ \{ id, name } -> unless (blank name) do
       liftEffect $ Storage.setItem authorKey (trim name) =<< localStorage
       H.modify_ _ { author = trim name }
       handleAction $ Join id
@@ -656,7 +720,7 @@ submit = withRoom \r -> when (sendable r) do
 
 -- | Tell the room we are typing, at most once per `typingThrottle`.
 pingTyping :: forall m. MonadAff m => App m Unit
-pingTyping = withRoom \r -> unless (null (trim r.draft)) do
+pingTyping = withRoom \r -> unless (blank r.draft) do
   at <- liftEffect nowMs
   when (at - r.typingSentAt > typingThrottle) do
     inRoom _ { typingSentAt = at }
@@ -700,10 +764,9 @@ byId = Map.fromFoldable <<< map \m -> Tuple m.id m
 -- | Swap the word the cursor is on (the last one) for `replacement`.
 replaceLastWord :: String -> String -> String
 replaceLastWord replacement draft =
-  let
-    words = split (Pattern " ") draft
-  in
-    joinWith " " (Array.dropEnd 1 words) <> (if length words > 1 then " " else "") <> replacement
+  joinWith " " (Array.dropEnd 1 words) <> (if length words > 1 then " " else "") <> replacement
+  where
+  words = split (Pattern " ") draft
 
 -- | How long a `typing` event keeps someone in the indicator, and how often
 -- | we send one while the draft changes.

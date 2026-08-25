@@ -49,8 +49,13 @@ export const scrollToId = (id) => () => {
   const el = document.getElementById(id);
   if (!el) return;
   el.scrollIntoView({ behavior: "smooth", block: "center" });
-  el.classList.add("flash");
-  setTimeout(() => el.classList.remove("flash"), 1200);
+  if (typeof el.animate === "function") {
+    const ring = getComputedStyle(el).getPropertyValue("--ui-color-focus-ring").trim();
+    el.animate(
+      [ { outline: `3px solid ${ring}`, outlineOffset: "3px" }, { outline: "3px solid transparent", outlineOffset: "6px" } ],
+      { duration: 900, easing: "ease-out" },
+    );
+  }
 };
 
 // Shrink to at most 1600px on the long side, as JPEG unless it has alpha.

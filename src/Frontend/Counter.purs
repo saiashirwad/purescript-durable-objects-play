@@ -21,6 +21,9 @@ import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
+import UI.Button as Button
+import UI.Core (Tone(..))
+import UI.Field as Field
 
 counters :: Namespace "Counter" CounterApi ()
 counters = Http.connect "/rpc" counter
@@ -61,19 +64,18 @@ render st =
         , HH.code_ [ HH.text "Namespace \"Counter\" CounterApi" ]
         , HH.text ", the same type the Worker uses."
         ]
-    , HH.label_
-        [ HH.text "Object name"
-        , HH.input
-            [ HP.value st.name
-            , HP.disabled st.busy
-            , HE.onValueInput SetName
-            ]
-        ]
+    , Field.input
+        ( (Field.defaults "counter-name" "Object name")
+            { description = Just "Each name addresses one Durable Object."
+            , disabled = st.busy
+            }
+        )
+        [ HP.value st.name, HE.onValueInput SetName ]
     , HH.div [ HP.class_ (HH.ClassName "value") ]
         [ HH.text $ maybe "—" show st.value ]
     , HH.div [ HP.class_ (HH.ClassName "actions") ]
-        [ HH.button [ HP.disabled st.busy, HE.onClick \_ -> Increment ] [ HH.text "increment" ]
-        , HH.button [ HP.disabled st.busy, HE.onClick \_ -> Refresh ] [ HH.text "get" ]
+        [ Button.button (Button.defaults { tone = Accent, busy = st.busy }) [ HE.onClick \_ -> Increment ] [ HH.text "increment" ]
+        , Button.button (Button.defaults { busy = st.busy }) [ HE.onClick \_ -> Refresh ] [ HH.text "get" ]
         ]
     , HH.h2_ [ HH.text "Calls" ]
     , HH.ol [ HP.class_ (HH.ClassName "history") ] $ st.history <#> \entry ->
