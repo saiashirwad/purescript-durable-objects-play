@@ -1,6 +1,4 @@
-# durable-mini
-
-Cloudflare Durable Objects in PureScript.
+# Cloudflare Durable Objects in PureScript.
 
 ```purescript
 type CounterApi =
