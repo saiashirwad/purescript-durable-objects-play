@@ -1,5 +1,29 @@
 # Cloudflare Durable Objects in PureScript.
 
+Live at [durable-mini.texoport.workers.dev](https://durable-mini.texoport.workers.dev/).
+
+```purescript
+-- One declaration. The class name is a type.
+type RoomApi =
+  ( post    :: NewMessage -> Rpc PostError Message
+  , history :: Unit       -> Rpc NoError (Array Message)
+  , since   :: Int        -> Rpc NoError (Array Message)
+  )
+
+room :: Object "Room" RoomApi
+room = Durable.object { post: method, history: method, since: method }
+
+-- In the Worker: a real Durable Object stub.
+rooms <- Durable.host roomLive
+(Durable.get rooms id).post { author, text }
+
+-- In the browser: same Record RoomApi, over HTTP.
+rooms = Http.connect "/rpc" room
+(Durable.get rooms id).post { author, text }
+```
+
+Implementing one:
+
 ```purescript
 type CounterApi =
   ( increment :: Unit -> Rpc NoError Int
