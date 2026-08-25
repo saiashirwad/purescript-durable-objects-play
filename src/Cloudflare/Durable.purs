@@ -10,7 +10,7 @@ module Cloudflare.Durable
 
 import Prelude
 
-import Cloudflare.Durable.Core (Handlers, Live, Manifest, Namespace, Object, ObjectId, className, container, emitting, get, getByName, handlers, http, idFromName, idFromString, idToString, implement, implementWith, listen, loopback, manifest, newUniqueId, object, sockets) as Core
+import Cloudflare.Durable.Core (Handlers, Hooks, Live, Manifest, Namespace, Object, ObjectId, alarmHook, className, connectHook, container, disconnectHook, emitting, fetchHook, get, getByName, handlers, http, idFromName, idFromString, idToString, implement, implementWith, listen, loopback, manifest, newUniqueId, object, sockets, withHooks) as Core
 import Cloudflare.Durable.Events (Event, Signal(..), event, eventWith) as Events
 import Cloudflare.Durable.Sockets (Sockets) as Sockets
 import Cloudflare.Durable.Core (Live(..), Object, className, manifest)

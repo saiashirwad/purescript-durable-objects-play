@@ -7,6 +7,7 @@ package:
     - arrays
     - avar
     - bifunctors
+    - codec
     - codec-argonaut
     - console
     - const

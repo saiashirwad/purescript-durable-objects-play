@@ -1,6 +1,7 @@
 module Cloudflare.Durable.Core
   ( Activated
   , Handlers
+  , Hooks
   , Id(..)
   , Listener
   , Live(..)
@@ -10,9 +11,13 @@ module Cloudflare.Durable.Core
   , ObjectId(..)
   , Transport
   , activate
+  , alarmHook
   , className
+  , connectHook
   , container
+  , disconnectHook
   , emitting
+  , fetchHook
   , get
   , getByName
   , handlers
@@ -30,13 +35,14 @@ module Cloudflare.Durable.Core
   , object
   , printId
   , sockets
+  , withHooks
   ) where
 
 import Prelude
 
 import Cloudflare.Durable.Container (Container)
 import Cloudflare.Durable.Container as Container
-import Cloudflare.Durable.Events (class DecodeEvents, class EncodeEvents, Signal, decodeEvents, decoded, encodeEvents, unwire)
+import Cloudflare.Durable.Events (class DecodeEvents, class EncodeEvents, Signal, decoded, variantCodec)
 import Cloudflare.Durable.Init (Env, Image, Init)
 import Cloudflare.Durable.Init as Init
 import Cloudflare.Durable.Protocol (class Connect, class MethodNames, class Serve, RawCall, RawHandler, connect, methodNames, serve)
@@ -48,16 +54,14 @@ import Cloudflare.Static (asks)
 import Cloudflare.Worker (Request, Response)
 import Cloudflare.Worker as Worker
 import Data.Argonaut.Core (Json)
-import Data.Argonaut.Core as J
 import Data.Codec.Argonaut (JsonDecodeError)
 import Data.Codec.Argonaut as CA
 import Data.Either (Either(..))
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Newtype (unwrap)
 import Data.Symbol (class IsSymbol, reflectSymbol)
-import Data.Tuple (Tuple(..))
 import Data.Variant (Variant, case_)
 import Effect (Effect)
 import Effect.Aff (Aff, error, throwError)
@@ -112,10 +116,8 @@ emitting
   -> Record spec
   -> Object name api events
 emitting (Object o) spec = Object o
-  { encodeEvent = encodeEvents list spec
-  , decodeEvent = \json -> do
-      Tuple tag value <- unwire json
-      fromMaybe (Left $ CA.Named "event" $ CA.UnexpectedValue $ J.fromString tag) $ decodeEvents list spec tag value
+  { encodeEvent = CA.encode (variantCodec list spec)
+  , decodeEvent = CA.decode (variantCodec list spec)
   }
   where
   list = Proxy :: Proxy list
@@ -134,25 +136,70 @@ loopback (Object o) impl = o.connect \name request ->
 
 -- Implementations ------------------------------------------------------------
 
--- | What activation yields. `alarm` runs when a scheduled alarm is due;
--- | `connect` and `disconnect` run as sockets come and go; each is a monoid
--- | whose `mempty` does nothing. `fetch` answers plain HTTP sent to the
--- | object at `<prefix>/<class>/<id>/http/...`; `noFetch` answers 404.
-type Handlers api =
-  { methods :: Record api
-  , alarm :: Runtime Unit
+type HookFields =
+  { alarm :: Runtime Unit
   , connect :: Socket -> Runtime Unit
   , disconnect :: Socket -> Runtime Unit
-  , fetch :: Request -> Runtime Response
+  , fetch :: Request -> Runtime (Maybe Response)
   }
 
-noFetch :: Request -> Runtime Response
-noFetch _ = pure $ Worker.text 404 "this object serves no HTTP"
+-- | Behavior around an object's methods: what runs when an alarm is due,
+-- | when sockets come and go, and plain HTTP sent to the object at
+-- | `<prefix>/<class>/<id>/http/...`. `Hooks` is a monoid: `<>` runs every
+-- | alarm, connect, and disconnect hook, and answers with the first `fetch`
+-- | hook that responds. `mempty` does nothing and serves no HTTP; activation
+-- | answers 404 for it.
+newtype Hooks = Hooks HookFields
 
--- | Methods with every hook at its default. Override with record update:
--- | `(handlers methods) { alarm = ..., fetch = ... }`.
+emptyHooks :: HookFields
+emptyHooks =
+  { alarm: mempty
+  , connect: mempty
+  , disconnect: mempty
+  , fetch: \_ -> pure Nothing
+  }
+
+instance semigroupHooks :: Semigroup Hooks where
+  append (Hooks a) (Hooks b) = Hooks
+    { alarm: a.alarm <> b.alarm
+    , connect: \socket -> a.connect socket <> b.connect socket
+    , disconnect: \socket -> a.disconnect socket <> b.disconnect socket
+    , fetch: \request -> a.fetch request >>= maybe (b.fetch request) (pure <<< Just)
+    }
+
+instance monoidHooks :: Monoid Hooks where
+  mempty = Hooks emptyHooks
+
+-- | Add one alarm action.
+alarmHook :: Runtime Unit -> Hooks
+alarmHook alarm = Hooks (emptyHooks { alarm = alarm })
+
+-- | Add one socket-connect action.
+connectHook :: (Socket -> Runtime Unit) -> Hooks
+connectHook connect = Hooks (emptyHooks { connect = connect })
+
+-- | Add one socket-disconnect action.
+disconnectHook :: (Socket -> Runtime Unit) -> Hooks
+disconnectHook disconnect = Hooks (emptyHooks { disconnect = disconnect })
+
+-- | Add one HTTP handler. `Nothing` lets the next fetch hook try the request.
+fetchHook :: (Request -> Runtime (Maybe Response)) -> Hooks
+fetchHook fetch = Hooks (emptyHooks { fetch = fetch })
+
+-- | Typed methods plus the hooks around them. Layer behavior on:
+-- | `handlers m \`withHooks\` (alarmHook sweep <> fetchHook serve)`.
+type Handlers api =
+  { methods :: Record api
+  , hooks :: Hooks
+  }
+
+-- | Methods with every hook at its default (`mempty`).
 handlers :: forall api. Record api -> Handlers api
-handlers methods = { methods, alarm: mempty, connect: mempty, disconnect: mempty, fetch: noFetch }
+handlers methods = { methods, hooks: mempty }
+
+-- | Add hooks to a set of handlers, keeping whatever is already there.
+withHooks :: forall api. Handlers api -> Hooks -> Handlers api
+withHooks hs extra = hs { hooks = hs.hooks <> extra }
 
 -- | The object's sockets, typed by its event row. Use during `Init` like `state`.
 sockets :: forall name api events. Object name api events -> Init (Sockets (Variant events))
@@ -197,12 +244,14 @@ type Activated =
 activate :: forall name api events. Live name api events -> Env -> Aff Activated
 activate (Live { object: Object o, activate: activation }) env =
   Runtime.run (join $ Init.build activation env) >>= case _ of
-    Right active -> pure
-      { methods: o.serve active.methods
-      , alarm: Runtime.rethrow active.alarm
-      , connect: Runtime.rethrow <<< active.connect
-      , disconnect: Runtime.rethrow <<< active.disconnect
-      , fetch: Runtime.rethrow <<< active.fetch
+    Right { methods, hooks: Hooks hooks } -> pure
+      { methods: o.serve methods
+      , alarm: Runtime.rethrow hooks.alarm
+      , connect: Runtime.rethrow <<< hooks.connect
+      , disconnect: Runtime.rethrow <<< hooks.disconnect
+      , fetch: \request -> do
+          served <- Runtime.rethrow (hooks.fetch request)
+          pure $ fromMaybe (Worker.text 404 "this object serves no HTTP") served
       }
     Left failure -> throwError $ error $ o.name <> " failed to activate: " <> show failure
 

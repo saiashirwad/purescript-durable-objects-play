@@ -7,8 +7,7 @@ module Cloudflare.Durable.Protocol
   , connect
   , connectList
   , methodNames
-  , decodeEnvelope
-  , encodeEnvelope
+  , envelopeCodec
   , serve
   , serveList
   ) where
@@ -19,6 +18,7 @@ import Cloudflare.Durable.Rpc (Method(..), Rpc(..), RpcFailure(..))
 import Cloudflare.Durable.Rpc as Rpc
 import Cloudflare.Durable.Runtime as Runtime
 import Control.Monad.Except (ExceptT(..))
+import Data.Codec (codec')
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
 import Data.Codec.Argonaut (JsonCodec)
@@ -97,7 +97,7 @@ connect list spec call = Builder.build (connectList list spec call) {}
 
 handler :: forall e req res. Method e req res -> (req -> Rpc e res) -> RawHandler
 handler (Method m) implementation request =
-  encodeEnvelope m.error m.success <$> case CA.decode m.request request of
+  CA.encode (envelopeCodec m.error m.success) <$> case CA.decode m.request request of
     Left err -> pure $ Left $ DecodeError $ CA.printJsonDecodeError err
     Right value -> attempt (Rpc.run (implementation value)) <#> case _ of
       Left exception -> Left $ RemoteDefect $ message exception
@@ -108,37 +108,38 @@ stub name (Method m) call request = Rpc $ ExceptT do
   response <- attempt $ call name (CA.encode m.request request)
   pure case response of
     Left exception -> Left $ TransportError $ message exception
-    Right envelope -> case decodeEnvelope m.error m.success envelope of
+    Right envelope -> case CA.decode (envelopeCodec m.error m.success) envelope of
       Left err -> Left $ DecodeError $ CA.printJsonDecodeError err
       Right result -> result
 
-encodeEnvelope :: forall e a. JsonCodec e -> JsonCodec a -> Either (RpcFailure e) a -> Json
-encodeEnvelope errorCodec successCodec = case _ of
-  Right value -> tagged "ok" [ "value" /\ CA.encode successCodec value ]
-  Left (DomainError e) -> tagged "error" [ "error" /\ CA.encode errorCodec e ]
-  Left (PlatformError (Runtime.PlatformError { operation, message })) ->
-    tagged "platform" [ "operation" /\ J.fromString operation, "message" /\ J.fromString message ]
-  Left (TransportError m) -> tagged "transport" [ "message" /\ J.fromString m ]
-  Left (DecodeError m) -> tagged "decode" [ "message" /\ J.fromString m ]
-  Left (RemoteDefect m) -> tagged "defect" [ "message" /\ J.fromString m ]
+envelopeCodec :: forall e a. JsonCodec e -> JsonCodec a -> JsonCodec (Either (RpcFailure e) a)
+envelopeCodec errorCodec successCodec = codec' decode encode
   where
-  tagged tag fields = J.fromObject $ Object.fromFoldable $ [ "tag" /\ J.fromString tag ] <> fields
+  encode = case _ of
+    Right value -> tagged "ok" [ "value" /\ CA.encode successCodec value ]
+    Left (DomainError e) -> tagged "error" [ "error" /\ CA.encode errorCodec e ]
+    Left (PlatformError (Runtime.PlatformError { operation, message })) ->
+      tagged "platform" [ "operation" /\ J.fromString operation, "message" /\ J.fromString message ]
+    Left (TransportError m) -> tagged "transport" [ "message" /\ J.fromString m ]
+    Left (DecodeError m) -> tagged "decode" [ "message" /\ J.fromString m ]
+    Left (RemoteDefect m) -> tagged "defect" [ "message" /\ J.fromString m ]
 
-decodeEnvelope :: forall e a. JsonCodec e -> JsonCodec a -> Json -> Either CA.JsonDecodeError (Either (RpcFailure e) a)
-decodeEnvelope errorCodec successCodec json = do
-  fields <- note (CA.TypeMismatch "Object") $ J.toObject json
-  let
-    field key = note (CA.AtKey key CA.MissingValue) $ Object.lookup key fields
-    text key = field key >>= J.toString >>> note (CA.AtKey key (CA.TypeMismatch "String"))
-  tag <- text "tag"
-  case tag of
-    "ok" -> Right <$> (field "value" >>= CA.decode successCodec)
-    "error" -> Left <<< DomainError <$> (field "error" >>= CA.decode errorCodec)
-    "platform" -> do
-      operation <- text "operation"
-      message <- text "message"
-      pure $ Left $ PlatformError $ Runtime.PlatformError { operation, message }
-    "transport" -> Left <<< TransportError <$> text "message"
-    "decode" -> Left <<< DecodeError <$> text "message"
-    "defect" -> Left <<< RemoteDefect <$> text "message"
-    other -> Left $ CA.Named "envelope tag" $ CA.UnexpectedValue $ J.fromString other
+  decode json = do
+    fields <- note (CA.TypeMismatch "Object") $ J.toObject json
+    let
+      field key = note (CA.AtKey key CA.MissingValue) $ Object.lookup key fields
+      text key = field key >>= J.toString >>> note (CA.AtKey key (CA.TypeMismatch "String"))
+    tag <- text "tag"
+    case tag of
+      "ok" -> Right <$> (field "value" >>= CA.decode successCodec)
+      "error" -> Left <<< DomainError <$> (field "error" >>= CA.decode errorCodec)
+      "platform" -> do
+        operation <- text "operation"
+        message <- text "message"
+        pure $ Left $ PlatformError $ Runtime.PlatformError { operation, message }
+      "transport" -> Left <<< TransportError <$> text "message"
+      "decode" -> Left <<< DecodeError <$> text "message"
+      "defect" -> Left <<< RemoteDefect <$> text "message"
+      other -> Left $ CA.Named "envelope tag" $ CA.UnexpectedValue $ J.fromString other
+
+  tagged tag fields = J.fromObject $ Object.fromFoldable $ [ "tag" /\ J.fromString tag ] <> fields

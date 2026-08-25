@@ -15,6 +15,7 @@ import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Container (Stop(..))
 import Cloudflare.Durable.Container as Container
 import Cloudflare.Durable.Rpc (NoError, Rpc, method)
+import Data.Maybe (Maybe(..))
 import Data.Time.Duration (Minutes(..))
 import Data.Tuple.Nested ((/\))
 
@@ -36,14 +37,16 @@ echoLive =
     box <- Durable.container (Container.image "./containers/echo/Dockerfile")
     in
       pure $
-        ( Durable.handlers
-            { running: \_ -> Container.running box
-            , halt: \_ -> Container.stop box Terminate
-            }
-        )
-          { fetch = \request -> do
-              Container.ensure box port $ Container.env [ "GREETING" /\ "hello from purescript" ]
-              Container.renew state box (Minutes 5.0)
-              Container.request box port request
-          , alarm = Container.expire state box
+        Durable.handlers
+          { running: \_ -> Container.running box
+          , halt: \_ -> Container.stop box Terminate
           }
+          `Durable.withHooks`
+            ( Durable.fetchHook
+                ( \request -> do
+                    Container.ensure box port $ Container.env [ "GREETING" /\ "hello from purescript" ]
+                    Container.renew state box (Minutes 5.0)
+                    Just <$> Container.request box port request
+                )
+                <> Durable.alarmHook (Container.expire state box)
+            )

@@ -8,6 +8,7 @@ import Chat.Markdown as Markdown
 import Data.Array as Array
 import Chat.Room.Live (roomLive, roomLiveWith)
 import Cloudflare.Durable as Durable
+import Cloudflare.Durable.Core (Live(..))
 import Cloudflare.Durable.Rpc (Rpc, RpcFailure(..))
 import Cloudflare.Durable.Rpc as Rpc
 import Cloudflare.Durable.Simulator as Simulator
@@ -359,7 +360,27 @@ main = launchAff_ do
       && Worker.status missing == 404
       && (map _.images posted == Right [ 1 ])
 
+  check "a matched fetch hook stops later hooks" do
+    layered <- Simulator.simulate $ withLiveHooks
+      (Durable.fetchHook \_ -> pure $ Just $ Worker.text 418 "later hook")
+      roomLive
+    id <- Durable.newUniqueId layered
+    missing <- Durable.http layered id $ Worker.requestTo "http://room/image/9"
+    missingBody <- Worker.responseText missing
+    unmatched <- Durable.http layered id $ Worker.requestTo "http://room/other"
+    pure $ Worker.status missing == 404
+      && missingBody == "no such image"
+      && Worker.status unmatched == 418
+
   log "All tests passed."
+
+withLiveHooks
+  :: forall name api events
+   . Durable.Hooks
+  -> Durable.Live name api events
+  -> Durable.Live name api events
+withLiveHooks extra (Live live) =
+  Live (live { activate = map (map (_ `Durable.withHooks` extra)) live.activate })
 
 check :: String -> Aff Boolean -> Aff Unit
 check name run = run >>= case _ of

@@ -78,9 +78,10 @@ byAccount = Sql.statement
 -- Alarms: `alarm :: Runtime Unit` is a Monoid; `mempty` means no alarm.
 reminderLive = Durable.implementWith reminder ado
   state <- Durable.state
-  in pure $ (Durable.handlers { remind: \{ after, note } -> ... })
-    { alarm = Storage.get state noteKey >>= traverse_ \note ->
-        Storage.put state (fired `Storage.at` "0") note }
+  in pure $ Durable.handlers { remind: \{ after, note } -> ... }
+    `Durable.withHooks`
+      (Durable.alarmHook $ Storage.get state noteKey >>= traverse_ \note ->
+        Storage.put state (fired `Storage.at` "0") note)
 
 -- Inside the object: sockets are a Contravariant channel. `cmap` narrows it
 -- to one event; `connect`/`disconnect` hooks are monoids like `alarm`.
@@ -90,19 +91,23 @@ roomLive = Durable.implementWith room $ map handlersFor <$> open
     state <- Durable.state
     sockets <- Durable.sockets room
     in do ...
-  handlersFor r = (Durable.handlers { post: post r, ... })
-    { connect = Sockets.broadcast (cmap (inj (Proxy :: _ "joined")) sockets) <<< _.tag }
+  handlersFor r = Durable.handlers { post: post r, ... }
+    `Durable.withHooks`
+      (Durable.connectHook $ Sockets.broadcast
+        (cmap (inj (Proxy :: _ "joined")) sockets) <<< _.tag)
 
 -- A container is declared where it is used; wrangler config follows.
 echoLive = Durable.implementWith echo ado
   state <- Durable.state
   box <- Durable.container (Container.image "./containers/echo/Dockerfile")
-  in pure $ (Durable.handlers { ... })
-    { fetch = \request -> do
-        Container.ensure box 8080 $ Container.env [ "GREETING" /\ "hi" ] <> Container.noInternet
-        Container.renew state box (Minutes 5.0)
-        Container.request box 8080 request
-    , alarm = Container.expire state box }
+  in pure $ Durable.handlers { ... }
+    `Durable.withHooks`
+      ( Durable.fetchHook (\request -> do
+          Container.ensure box 8080 $ Container.env [ "GREETING" /\ "hi" ] <> Container.noInternet
+          Container.renew state box (Minutes 5.0)
+          Just <$> Container.request box 8080 request)
+          <> Durable.alarmHook (Container.expire state box)
+      )
 
 -- Agents: a Def names no model; mount attaches one and some tools. A model
 -- is a provider (data: url, auth, wire) plus a catalogue entry (data: what

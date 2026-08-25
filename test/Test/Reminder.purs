@@ -43,17 +43,17 @@ reminderLive =
     state <- Durable.state
     in
       pure $
-        ( Durable.handlers
-            { remind: \{ after, note } -> do
-                Storage.put state noteKey note
-                Alarm.scheduleIn state (Milliseconds after)
-            , pending: \_ -> isJust <$> Alarm.scheduled state
-            , fired: \_ -> fromFoldable <<< Map.values <$> Storage.list state fired
-            , forget: \_ -> Storage.deleteAll state
-            }
-        )
-          { alarm = Storage.get state noteKey >>= traverse_ \text -> do
-              done <- Storage.list state fired
-              Storage.put state (fired `Storage.at` show (Map.size done)) text
-              void $ Storage.delete state noteKey
+        Durable.handlers
+          { remind: \{ after, note } -> do
+              Storage.put state noteKey note
+              Alarm.scheduleIn state (Milliseconds after)
+          , pending: \_ -> isJust <$> Alarm.scheduled state
+          , fired: \_ -> fromFoldable <<< Map.values <$> Storage.list state fired
+          , forget: \_ -> Storage.deleteAll state
           }
+          `Durable.withHooks`
+            ( Durable.alarmHook $ Storage.get state noteKey >>= traverse_ \text -> do
+                done <- Storage.list state fired
+                Storage.put state (fired `Storage.at` show (Map.size done)) text
+                void $ Storage.delete state noteKey
+            )

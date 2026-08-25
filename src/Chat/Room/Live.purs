@@ -104,19 +104,19 @@ open modelFor = ado
 
 handlersFor :: Room -> Handlers RoomApi
 handlersFor r =
-  ( Durable.handlers
-      { post: post r
-      , react: react r
-      , history: \_ -> liftEffect $ Ref.read r.messages
-      , members: \_ -> members r
-      , typing: Sockets.broadcast r.emit.typing
-      }
-  )
-    { alarm = answer r
-    , fetch = images r.state
-    , connect = Sockets.broadcast r.emit.joined <<< _.tag
-    , disconnect = Sockets.broadcast r.emit.left <<< _.tag
+  Durable.handlers
+    { post: post r
+    , react: react r
+    , history: \_ -> liftEffect $ Ref.read r.messages
+    , members: \_ -> members r
+    , typing: Sockets.broadcast r.emit.typing
     }
+    `Durable.withHooks`
+      ( Durable.alarmHook (answer r)
+          <> Durable.fetchHook (images r.state)
+          <> Durable.connectHook (Sockets.broadcast r.emit.joined <<< _.tag)
+          <> Durable.disconnectHook (Sockets.broadcast r.emit.left <<< _.tag)
+      )
 
 -- Storage ---------------------------------------------------------------------
 
@@ -238,22 +238,23 @@ maxImageChars :: Int
 maxImageChars = 5600000
 
 -- | `POST /image` (body: the bytes, header: its type) answers `{ "id": n }`;
--- | `GET /image/<n>` serves it.
-images :: State -> Worker.Request -> Runtime Worker.Response
+-- | `GET /image/<n>` serves it. A request that does not match an image route
+-- | returns `Nothing`, so other fetch hooks get their turn.
+images :: State -> Worker.Request -> Runtime (Maybe Worker.Response)
 images state request = case Worker.method request, Worker.pathname request of
   "POST", "/image"
     | Just _ <- Worker.header request "content-type" >>= stripPrefix (Pattern "image/") -> do
         body <- liftAff $ Worker.bodyBase64 request
-        if length body > maxImageChars then pure $ Worker.text 413 "image too large"
+        if length body > maxImageChars then pure $ Just $ Worker.text 413 "image too large"
         else do
           id <- fromMaybe 0 <$> Sql.first state insertImage { mime: fromMaybe "" (Worker.header request "content-type"), data: body }
-          pure $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: CA.int }) { id }
-    | otherwise -> pure $ Worker.text 415 "send an image/* body"
+          pure $ Just $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: CA.int }) { id }
+    | otherwise -> pure $ Just $ Worker.text 415 "send an image/* body"
   "GET", path | Just id <- stripPrefix (Pattern "/image/") path >>= fromString ->
     Sql.first state selectImage id <#> case _ of
-      Just image -> Worker.bytes 200 image.mime image.data
-      Nothing -> Worker.text 404 "no such image"
-  _, _ -> pure $ Worker.text 404 "not found"
+      Just image -> Just $ Worker.bytes 200 image.mime image.data
+      Nothing -> Just $ Worker.text 404 "no such image"
+  _, _ -> pure Nothing
 
 -- The assistant --------------------------------------------------------------------
 

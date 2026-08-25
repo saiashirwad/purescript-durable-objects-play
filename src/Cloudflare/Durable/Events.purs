@@ -1,5 +1,8 @@
 -- | Events an object pushes to its sockets, typed as a row: `Variant events`
 -- | on both ends, `{ "event": tag, "value": json }` on the wire.
+-- |
+-- | `variantCodec` exposes both directions as one
+-- | `JsonCodec (Variant events)`.
 module Cloudflare.Durable.Events
   ( Event
   , Signal(..)
@@ -11,18 +14,20 @@ module Cloudflare.Durable.Events
   , event
   , eventWith
   , unwire
+  , variantCodec
   , wire
   ) where
 
 import Prelude
 
 import Cloudflare.Durable.Codec (class HasCodec, codec)
+import Data.Codec (codec')
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
 import Data.Codec.Argonaut (JsonCodec, JsonDecodeError(..), printJsonDecodeError)
 import Data.Codec.Argonaut as CA
-import Data.Either (Either, either, note)
-import Data.Maybe (Maybe(..))
+import Data.Either (Either(..), either, note)
+import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Symbol (class IsSymbol, reflectSymbol)
 import Data.Tuple (Tuple(..))
 import Data.Tuple.Nested ((/\))
@@ -94,7 +99,8 @@ instance encodeEventsCons ::
   , EncodeEvents tail spec eventsTail
   ) =>
   EncodeEvents (Cons name (Event a) tail) spec events where
-  encodeEvents _ spec = on name (\value -> wire (reflectSymbol name) (CA.encode c value)) (encodeEvents (Proxy :: Proxy tail) spec)
+  encodeEvents _ spec =
+    on name (\value -> wire (reflectSymbol name) (CA.encode c value)) (encodeEvents (Proxy :: Proxy tail) spec)
     where
     name = Proxy :: Proxy name
     Event c = Record.get name spec
@@ -118,6 +124,24 @@ instance decodeEventsCons ::
     where
     name = Proxy :: Proxy name
     Event c = Record.get name spec
+
+-- | Both directions as one codec: `{ "event": tag, "value": json }` on the
+-- | wire. Decoding fails under `Named "event"`, with `UnexpectedValue` for a
+-- | tag no event owns.
+variantCodec
+  :: forall list spec events
+   . EncodeEvents list spec events
+  => DecodeEvents list spec events
+  => Proxy list
+  -> Record spec
+  -> JsonCodec (Variant events)
+variantCodec list spec = codec' decode encode
+  where
+  encode = encodeEvents list spec
+
+  decode json = do
+    Tuple tag value <- unwire json
+    fromMaybe (Left $ CA.Named "event" $ CA.UnexpectedValue $ J.fromString tag) $ decodeEvents list spec tag value
 
 wire :: String -> Json -> Json
 wire tag value = J.fromObject $ Object.fromFoldable [ "event" /\ J.fromString tag, "value" /\ value ]
