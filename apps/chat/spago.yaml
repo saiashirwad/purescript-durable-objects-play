@@ -1,0 +1,49 @@
+package:
+  name: chat
+  dependencies:
+    - aff
+    - aff-promise
+    - ai
+    - arrays
+    - cloudflare-durable
+    - cloudflare-worker
+    - codec-argonaut
+    - contravariant
+    - control
+    - datetime
+    - effect
+    - either
+    - foldable-traversable
+    - foreign-object
+    - halogen
+    - halogen-subscriptions
+    - integers
+    - markdown
+    - maybe
+    - newtype
+    - now
+    - ordered-collections
+    - prelude
+    - profunctor
+    - profunctor-lenses
+    - refs
+    - strings
+    - tuples
+    - transformers
+    - ui
+    - variant
+    - web-events
+    - web-html
+    - web-storage
+    - web-uievents
+  test:
+    main: Test.Chat.Main
+    dependencies:
+      - argonaut-core
+      - console
+      - exceptions
+  bundle:
+    module: Chat.Page
+    outfile: ../site/public/chat.js
+    platform: browser
+    type: app

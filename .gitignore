@@ -5,12 +5,12 @@ output/
 .purs-repl
 
 # Generated
-public/chat.js
-public/counter.js
-public/ui-lab.js
-public/ui.css
-public/chat.css
-wrangler.jsonc
+apps/site/public/chat.js
+apps/site/public/counter.js
+apps/site/public/ui-lab.js
+apps/site/public/ui.css
+apps/site/public/chat.css
+apps/site/wrangler.jsonc
 test-results/
 playwright-report/
 
@@ -19,7 +19,7 @@ node_modules/
 
 # Wrangler
 .wrangler/
-.dev.vars*
+apps/site/.dev.vars*
 
 # OS and editors
 .DS_Store

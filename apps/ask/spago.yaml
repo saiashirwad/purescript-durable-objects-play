@@ -1,0 +1,14 @@
+package:
+  name: ask
+  dependencies:
+    - aff
+    - ai
+    - console
+    - datetime
+    - effect
+    - either
+    - formatters
+    - now
+    - prelude
+  run:
+    main: Ask

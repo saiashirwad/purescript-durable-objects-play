@@ -1,0 +1,19 @@
+package:
+  name: echo
+  dependencies:
+    - cloudflare-durable
+    - datetime
+    - maybe
+    - prelude
+    - tuples
+  test:
+    main: Test.Echo.Main
+    dependencies:
+      - aff
+      - cloudflare-worker
+      - console
+      - effect
+      - either
+      - exceptions
+      - ordered-collections
+      - refs

@@ -3,17 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "spago build && npm run css",
-    "build:ui": "spago build -p durable-ui",
-    "css": "node scripts/ui-css.mjs",
-    "bundle": "spago bundle --package durable-mini --module Frontend.Chat --outfile public/chat.js --platform browser --bundle-type app && spago bundle --package durable-mini --module Frontend.Counter --outfile public/counter.js --platform browser --bundle-type app && npm run bundle:lab",
-    "bundle:lab": "spago bundle --package durable-ui --module UI.Lab --outfile ../public/ui-lab.js --platform browser --bundle-type app",
-    "config": "node scripts/config.mjs",
-    "dev": "npm run build && npm run bundle && npm run config && wrangler dev",
-    "deploy": "npm run build && npm run bundle && npm run config && wrangler deploy",
-    "test": "spago test -p durable-mini && npm run test:ui",
-    "test:e2e": "playwright test",
-    "test:ui": "spago test -p durable-ui"
+    "build": "spago build && node apps/site/scripts/css.mjs",
+    "bundle": "spago bundle -p chat && spago bundle -p counter && spago bundle -p ui",
+    "config": "node apps/site/scripts/config.mjs",
+    "dev": "npm run build && npm run bundle && npm run config && wrangler dev --config apps/site/wrangler.jsonc",
+    "deploy": "npm run build && npm run bundle && npm run config && wrangler deploy --config apps/site/wrangler.jsonc",
+    "test": "spago test",
+    "test:e2e": "playwright test -c apps/site/playwright.config.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

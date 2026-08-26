@@ -1,0 +1,28 @@
+package:
+  name: ai
+  dependencies:
+    - aff
+    - aff-promise
+    - argonaut-core
+    - arrays
+    - bifunctors
+    - codec-argonaut
+    - effect
+    - either
+    - foreign-object
+    - foldable-traversable
+    - invariant
+    - maybe
+    - newtype
+    - prelude
+    - profunctor
+    - record
+    - refs
+    - tailrec
+    - transformers
+    - tuples
+  test:
+    main: Test.Ai.Main
+    dependencies:
+      - console
+      - exceptions

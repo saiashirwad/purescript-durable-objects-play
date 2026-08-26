@@ -1,0 +1,15 @@
+package:
+  name: site
+  dependencies:
+    - aff
+    - argonaut-core
+    - chat
+    - cloudflare-durable
+    - cloudflare-worker
+    - codec-argonaut
+    - counter
+    - echo
+    - either
+    - maybe
+    - prelude
+    - strings

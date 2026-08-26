@@ -1,0 +1,38 @@
+package:
+  name: cloudflare-durable
+  dependencies:
+    - aff
+    - aff-promise
+    - argonaut-core
+    - arrays
+    - bifunctors
+    - cloudflare-worker
+    - codec
+    - codec-argonaut
+    - contravariant
+    - datetime
+    - effect
+    - either
+    - exceptions
+    - foldable-traversable
+    - foreign
+    - foreign-object
+    - functions
+    - maybe
+    - newtype
+    - now
+    - nullable
+    - ordered-collections
+    - prelude
+    - profunctor
+    - record
+    - refs
+    - strings
+    - tailrec
+    - transformers
+    - tuples
+    - variant
+  test:
+    main: Test.Main
+    dependencies:
+      - console

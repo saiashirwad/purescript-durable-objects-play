@@ -1,50 +1,92 @@
 {
   "workspace": {
     "packages": {
-      "durable-mini": {
-        "path": "./",
+      "ai": {
+        "path": "lib/ai",
         "core": {
           "dependencies": [
             "aff",
             "aff-promise",
             "argonaut-core",
             "arrays",
-            "avar",
             "bifunctors",
-            "codec",
             "codec-argonaut",
-            "console",
-            "const",
-            "contravariant",
-            "control",
-            "datetime",
-            "durable-ui",
             "effect",
             "either",
             "foldable-traversable",
-            "foreign",
             "foreign-object",
-            "formatters",
-            "functions",
-            "functors",
-            "halogen",
-            "halogen-subscriptions",
             "invariant",
             "maybe",
             "newtype",
+            "prelude",
+            "profunctor",
+            "record",
+            "refs",
+            "tailrec",
+            "transformers",
+            "tuples"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "console",
+            "exceptions"
+          ]
+        }
+      },
+      "ask": {
+        "path": "apps/ask",
+        "core": {
+          "dependencies": [
+            "aff",
+            "ai",
+            "console",
+            "datetime",
+            "effect",
+            "either",
+            "formatters",
             "now",
-            "nullable",
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
+      "chat": {
+        "path": "apps/chat",
+        "core": {
+          "dependencies": [
+            "aff",
+            "aff-promise",
+            "ai",
+            "arrays",
+            "cloudflare-durable",
+            "cloudflare-worker",
+            "codec-argonaut",
+            "contravariant",
+            "control",
+            "datetime",
+            "effect",
+            "either",
+            "foldable-traversable",
+            "foreign-object",
+            "halogen",
+            "halogen-subscriptions",
+            "integers",
+            "markdown",
+            "maybe",
+            "newtype",
+            "now",
             "ordered-collections",
-            "parallel",
             "prelude",
             "profunctor",
             "profunctor-lenses",
-            "record",
             "refs",
             "strings",
-            "tailrec",
             "transformers",
             "tuples",
+            "ui",
             "variant",
             "web-events",
             "web-html",
@@ -54,12 +96,174 @@
         },
         "test": {
           "dependencies": [
+            "argonaut-core",
+            "console",
             "exceptions"
           ]
         }
       },
-      "durable-ui": {
-        "path": "ui",
+      "cloudflare-durable": {
+        "path": "lib/durable",
+        "core": {
+          "dependencies": [
+            "aff",
+            "aff-promise",
+            "argonaut-core",
+            "arrays",
+            "bifunctors",
+            "cloudflare-worker",
+            "codec",
+            "codec-argonaut",
+            "contravariant",
+            "datetime",
+            "effect",
+            "either",
+            "exceptions",
+            "foldable-traversable",
+            "foreign",
+            "foreign-object",
+            "functions",
+            "maybe",
+            "newtype",
+            "now",
+            "nullable",
+            "ordered-collections",
+            "prelude",
+            "profunctor",
+            "record",
+            "refs",
+            "strings",
+            "tailrec",
+            "transformers",
+            "tuples",
+            "variant"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "console"
+          ]
+        }
+      },
+      "cloudflare-worker": {
+        "path": "lib/worker",
+        "core": {
+          "dependencies": [
+            "aff",
+            "aff-promise",
+            "argonaut-core",
+            "arrays",
+            "const",
+            "control",
+            "effect",
+            "foreign",
+            "foreign-object",
+            "functors",
+            "integers",
+            "maybe",
+            "nullable",
+            "prelude",
+            "transformers",
+            "tuples"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
+      "counter": {
+        "path": "apps/counter",
+        "core": {
+          "dependencies": [
+            "aff",
+            "arrays",
+            "cloudflare-durable",
+            "console",
+            "effect",
+            "either",
+            "halogen",
+            "maybe",
+            "prelude",
+            "refs",
+            "ui"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "exceptions"
+          ]
+        }
+      },
+      "echo": {
+        "path": "apps/echo",
+        "core": {
+          "dependencies": [
+            "cloudflare-durable",
+            "datetime",
+            "maybe",
+            "prelude",
+            "tuples"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "aff",
+            "cloudflare-worker",
+            "console",
+            "effect",
+            "either",
+            "exceptions",
+            "ordered-collections",
+            "refs"
+          ]
+        }
+      },
+      "markdown": {
+        "path": "lib/markdown",
+        "core": {
+          "dependencies": [
+            "arrays",
+            "control",
+            "maybe",
+            "prelude",
+            "strings",
+            "tuples",
+            "unicode"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "aff",
+            "console",
+            "effect",
+            "exceptions"
+          ]
+        }
+      },
+      "site": {
+        "path": "apps/site",
+        "core": {
+          "dependencies": [
+            "aff",
+            "argonaut-core",
+            "chat",
+            "cloudflare-durable",
+            "cloudflare-worker",
+            "codec-argonaut",
+            "counter",
+            "echo",
+            "either",
+            "maybe",
+            "prelude",
+            "strings"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
+      "ui": {
+        "path": "lib/ui",
         "core": {
           "dependencies": [
             "aff",
@@ -68,6 +272,7 @@
             "const",
             "dom-indexed",
             "effect",
+            "enums",
             "foldable-traversable",
             "halogen",
             "maybe",
@@ -819,20 +1024,6 @@
         "tuples",
         "unfoldable",
         "unsafe-coerce"
-      ]
-    },
-    "avar": {
-      "type": "registry",
-      "version": "5.0.1",
-      "integrity": "sha256-8V4SxF4TIWZ9Ik1P4lPzIRUAZeFBe8w5WA2VcCEKsIk=",
-      "dependencies": [
-        "aff",
-        "effect",
-        "either",
-        "exceptions",
-        "functions",
-        "maybe",
-        "prelude"
       ]
     },
     "bifunctors": {

@@ -1,0 +1,25 @@
+package:
+  name: counter
+  dependencies:
+    - aff
+    - arrays
+    - cloudflare-durable
+    - console
+    - effect
+    - either
+    - halogen
+    - maybe
+    - prelude
+    - refs
+    - ui
+  test:
+    main: Test.Counter.Main
+    dependencies:
+      - exceptions
+  run:
+    main: Counter.Demo
+  bundle:
+    module: Counter.Page
+    outfile: ../site/public/counter.js
+    platform: browser
+    type: app

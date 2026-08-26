@@ -1,0 +1,17 @@
+package:
+  name: markdown
+  dependencies:
+    - arrays
+    - control
+    - maybe
+    - prelude
+    - strings
+    - tuples
+    - unicode
+  test:
+    main: Test.Markdown.Main
+    dependencies:
+      - aff
+      - console
+      - effect
+      - exceptions

@@ -133,8 +133,8 @@ npm run test:e2e  # test pages in Chrome with axe
 spago test        # same objects, in-memory simulator
 ```
 
-Library in `src/Cloudflare/`, agents in `src/Ai/`, chat in `src/Chat/`, pages in `src/Frontend/`.
+Libraries are in `lib/`; applications are in `apps/`.
 
-The UI library is a separate local package in `ui/`. Open `/ui.html` during
-local development to see its component lab. See `ui/README.md` for its API,
+The UI library is the `ui` package in `lib/ui/`. Open `/ui.html` during local
+development to see its component lab. See `lib/ui/README.md` for its API,
 theme model, accessibility rules, and package split plan.

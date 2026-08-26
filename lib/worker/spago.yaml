@@ -1,0 +1,19 @@
+package:
+  name: cloudflare-worker
+  dependencies:
+    - aff
+    - aff-promise
+    - argonaut-core
+    - arrays
+    - const
+    - control
+    - effect
+    - foreign
+    - foreign-object
+    - functors
+    - integers
+    - maybe
+    - nullable
+    - prelude
+    - transformers
+    - tuples
