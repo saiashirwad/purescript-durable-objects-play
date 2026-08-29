@@ -1,6 +1,7 @@
 module Chat.Page.Composer
   ( composer
   , sendable
+  , mentionFocus
   , suggestions
   , replaceLastWord
   , handle
@@ -13,20 +14,21 @@ import Chat.Client as Chat
 import Chat.Page.Browser (nowMs)
 import Chat.Page.Icons (imageIcon, replyIcon, sendIcon)
 import Chat.Page.Shared (avatar, blank, imageEndpoint, imageUrl, quiet, small)
-import Chat.Page.Types (App, ComposerAction(..), RoomView, inRoom, withRoom)
-import Chat.Room (Message, assistantName)
+import Chat.Page.Types (App, ComposerAction(..), ComposerState, ComposerStatus(..), RoomToken, RoomView, modifyRoom, modifyRoomAt, withRoom)
+import Chat.Room (Message, assistantName, describePostError)
 import Chat.Style (styles)
 import Cloudflare.Durable.Rpc as Rpc
 import Control.Promise (Promise, toAffE)
-import Data.Array (filter, last, length, take)
+import Data.Array (filter, take)
 import Data.Array as Array
-import Data.Either (Either(..), either)
+import Data.Either (Either(..))
 import Data.Foldable (traverse_)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Monoid (guard)
-import Data.String (Pattern(..), joinWith, split, stripPrefix)
+import Data.String (Pattern(..), stripPrefix)
 import Data.String as String
+import Data.String.CodeUnits as CodeUnits
 import Effect (Effect)
 import Effect.Aff (attempt, message)
 import Effect.Aff.Class (class MonadAff, liftAff)
@@ -43,15 +45,22 @@ import UI.Icon as Icon
 import UI.Input as Input
 import UI.Status as Status
 import UI.Style (css)
-import Web.Event.Event (Event, EventType(..), preventDefault)
-import Web.HTML.HTMLElement (focus)
+import Web.Clipboard.ClipboardEvent as Clipboard
+import Web.Event.Event (preventDefault)
+import Web.File.File (File)
+import Web.File.FileList as FileList
+import Web.HTML.Event.DataTransfer as DataTransfer
+import Web.HTML.HTMLElement (click, focus)
+import Web.HTML.HTMLInputElement as InputElement
 import Web.UIEvent.KeyboardEvent (key, toEvent)
 
-foreign import pickAndUpload :: String -> Effect (Promise (Array Int))
-foreign import uploadPasted :: String -> Event -> Effect (Promise (Array Int))
+foreign import uploadFiles :: String -> Array File -> Effect (Promise (Array Int))
 
 composerRef :: H.RefLabel
 composerRef = H.RefLabel "composer"
+
+fileRef :: H.RefLabel
+fileRef = H.RefLabel "file"
 
 composer :: forall w. String -> RoomView -> HH.HTML w ComposerAction -> HH.HTML w ComposerAction
 composer author room typing =
@@ -61,21 +70,30 @@ composer author room typing =
     , attachmentStrip room
     , suggestionBar author room
     , HH.form [ css styles.composer, HE.onSubmit Submit, dataAttr "ui" "composer" ]
-        [ Button.iconButton "Attach image" (Button.defaults { tone = Quiet }) [ HP.title "Attach image", HE.onClick \_ -> Attach ]
+        [ Button.iconButton "Attach image" (Button.defaults { tone = Quiet, disabled = not (isEditing room) }) [ HP.title "Attach image", HE.onClick \_ -> Attach ]
             [ Icon.styled styles.largeIcon imageIcon ]
-        , Input.text (Input.defaults { disabled = room.sending, styles = styles.input })
+        , HH.input
+            [ HP.ref fileRef
+            , HP.type_ HP.InputFile
+            , HP.attr (HH.AttrName "accept") "image/*"
+            , HP.multiple true
+            , HP.disabled $ not $ isEditing room
+            , HP.style "display:none"
+            , HE.onFileUpload SelectedFiles
+            ]
+        , Input.text (Input.defaults { disabled = not (isEditing room), styles = styles.input })
             [ HP.placeholder $ "Message · @" <> assistantName <> " to ask the assistant · markdown ok"
             , ARIA.label "Message"
             , HP.autofocus true
             , HP.autocomplete HP.AutocompleteOff
-            , HP.value room.draft
+            , HP.value room.composer.draft
             , HP.ref composerRef
             , HE.onValueInput SetDraft
             , HE.onKeyDown KeyDown
-            , HE.handler (EventType "paste") Pasted
+            , HE.onPaste Pasted
             ]
         , Button.submit
-            (Button.defaults { tone = Accent, disabled = room.sending || room.uploading || not (sendable room), busy = room.sending, styles = styles.send })
+            (Button.defaults { tone = Accent, disabled = not (isEditing room) || not (sendable room), busy = room.composer.status == Sending, styles = styles.send })
             [ HP.title "Send", ARIA.label "Send" ]
             [ Icon.render sendIcon ]
         ]
@@ -83,37 +101,37 @@ composer author room typing =
     ]
 
 sendable :: RoomView -> Boolean
-sendable room = not (blank room.draft) || not (Array.null room.attachments)
+sendable room = not (blank room.composer.draft) || not (Array.null room.composer.attachments)
 
 suggestionBar :: forall w. String -> RoomView -> HH.HTML w ComposerAction
-suggestionBar author room = case suggestions author room of
+suggestionBar author room = case suggestions author (suggestionInput room) of
   [] -> HH.text ""
   names -> HH.div [ css styles.suggestions, ARIA.label "Mention suggestions" ] $ names <#> \name ->
-    Button.button (quiet { styles = styles.suggestion }) [ HE.onClick \_ -> PickMention name ]
+    Button.button (quiet { disabled = not (isEditing room), styles = styles.suggestion }) [ HE.onClick \_ -> PickMention name ]
       [ avatar styles.compactAvatar name, HH.text name ]
 
 replyChip :: forall w. RoomView -> HH.HTML w ComposerAction
-replyChip room = case room.replyTo >>= \id -> Map.lookup id room.messages of
+replyChip room = case room.composer.replyTo >>= \id -> Map.lookup id room.messages of
   Nothing -> HH.text ""
   Just parent ->
     HH.div [ css styles.replyChip ]
       [ Icon.render replyIcon
       , HH.span [ css styles.replyChipText ]
           [ HH.text "Replying to ", HH.strong_ [ HH.text parent.author ], HH.text $ ": " <> String.take 60 (Markdown.plain parent.text) ]
-      , Button.iconButton "Cancel reply" quiet [ HP.title "Cancel", HE.onClick \_ -> Reply Nothing ] [ HH.text "×" ]
+      , Button.iconButton "Cancel reply" (quiet { disabled = not (isEditing room) }) [ HP.title "Cancel", HE.onClick \_ -> Reply Nothing ] [ HH.text "×" ]
       ]
 
 attachmentStrip :: forall w. RoomView -> HH.HTML w ComposerAction
 attachmentStrip room
-  | Array.null room.attachments && not room.uploading = HH.text ""
+  | Array.null room.composer.attachments && room.composer.status /= Uploading = HH.text ""
   | otherwise =
       HH.div [ css styles.attachments, ARIA.label "Image attachments" ] $
-        (thumbnail <$> room.attachments)
-          <> guard room.uploading [ HH.span [ css styles.uploading, ARIA.role "status" ] [ HH.text "Uploading an image…" ] ]
+        (thumbnail <$> room.composer.attachments)
+          <> guard (room.composer.status == Uploading) [ HH.span [ css styles.uploading, ARIA.role "status" ] [ HH.text "Uploading an image…" ] ]
       where
       thumbnail n = HH.span [ css styles.attachment ]
         [ HH.img [ css styles.thumbnail, HP.src (imageUrl room.id n), HP.alt "Image attachment preview" ]
-        , Button.iconButton ("Remove attachment " <> show n) (small { styles = styles.remove }) [ HE.onClick \_ -> Detach n ] [ HH.text "×" ]
+        , Button.iconButton ("Remove attachment " <> show n) (small { disabled = not (isEditing room), styles = styles.remove }) [ HE.onClick \_ -> Detach n ] [ HH.text "×" ]
         ]
 
 suggestions
@@ -121,67 +139,121 @@ suggestions
    . String
   -> { draft :: String, members :: Array String, messages :: Map.Map Int Message | row }
   -> Array String
-suggestions author room = case last (split (Pattern " ") room.draft) >>= stripPrefix (Pattern "@") of
-  Just partial | not (String.contains (Pattern "\n") partial) ->
-    take 6 $ filter (\name -> name /= author && isJust (stripPrefix (Pattern (String.toLower partial)) (String.toLower name))) candidates
+suggestions author room = case mentionFocus room.draft of
+  Just { query } ->
+    take 6 $ filter (matches query) candidates
   _ -> []
   where
-  candidates = Array.nub $ [ assistantName ] <> room.members <> (Array.fromFoldable room.messages <#> _.author)
+  candidates = Array.nubByEq sameName $ [ assistantName ] <> room.members <> (Array.fromFoldable room.messages <#> _.author)
+  sameName left right = String.toLower left == String.toLower right
+  matches query name = not (sameName name author) && isJust (stripPrefix (Pattern (String.toLower query)) (String.toLower name))
+
+mentionFocus :: String -> Maybe { before :: String, query :: String }
+mentionFocus draft = do
+  let start = maybe 0 (_ + 1) $ Array.findLastIndex whitespace $ CodeUnits.toCharArray draft
+  query <- stripPrefix (Pattern "@") $ CodeUnits.drop start draft
+  pure { before: CodeUnits.take start draft, query }
+  where
+  whitespace character = character == ' ' || character == '\t' || character == '\n' || character == '\r'
 
 handle :: forall m. MonadAff m => ComposerAction -> App m Unit
 handle = case _ of
-  SetDraft draft -> inRoom _ { draft = draft } *> pingTyping
-  KeyDown event -> withRoom \room -> do
+  SetDraft draft -> whileEditing \_ -> modifyComposer (_ { draft = draft }) *> pingTyping
+  KeyDown event -> whileEditing \room -> do
     { author } <- H.get
-    case key event, Array.head (suggestions author room) of
+    case key event, Array.head (suggestions author (suggestionInput room)) of
       "Tab", Just first -> do
         liftEffect $ preventDefault $ toEvent event
         handle $ PickMention first
-      "Escape", _ -> inRoom _ { replyTo = Nothing }
+      "Escape", _ -> modifyComposer (_ { replyTo = Nothing })
       _, _ -> pure unit
-  PickMention name -> do
-    inRoom \room -> room { draft = replaceLastWord ("@" <> name <> " ") room.draft }
+  PickMention name -> whileEditing \_ -> do
+    modifyComposer \composerState -> composerState { draft = replaceLastWord ("@" <> name <> " ") composerState.draft }
     focusComposer
-  Pasted event -> withRoom \room -> upload $ uploadPasted (imageEndpoint room.id) event
-  Attach -> withRoom \room -> upload $ pickAndUpload (imageEndpoint room.id)
-  Attached ids -> inRoom \room -> room { attachments = room.attachments <> ids, uploading = false }
-  Detach n -> inRoom \room -> room { attachments = filter (_ /= n) room.attachments }
-  Reply target -> inRoom _ { replyTo = target } *> focusComposer
+  Pasted event -> whileEditing \room -> case Clipboard.clipboardData event >>= DataTransfer.files of
+    Nothing -> pure unit
+    Just list -> do
+      let files = FileList.items list
+      unless (Array.null files) do
+        liftEffect $ preventDefault $ Clipboard.toEvent event
+        upload room.token $ uploadFiles (imageEndpoint room.id) files
+  Attach -> whileEditing \_ -> H.getHTMLElementRef fileRef >>= traverse_ (liftEffect <<< click)
+  SelectedFiles files -> whileEditing \room -> unless (Array.null files) do
+    resetFileInput
+    upload room.token $ uploadFiles (imageEndpoint room.id) files
+  Detach n -> whileEditing \_ -> modifyComposer \composerState -> composerState { attachments = filter (_ /= n) composerState.attachments }
+  Reply target -> whileEditing \_ -> modifyComposer (_ { replyTo = target }) *> focusComposer
   Submit event -> liftEffect (preventDefault event) *> submit
 
 submit :: forall m. MonadAff m => App m Unit
-submit = withRoom \room -> when (sendable room) do
+submit = whileEditing \room -> when (sendable room) do
   { author } <- H.get
-  inRoom _ { sending = true, error = Nothing }
-  outcome <- liftAff $ Rpc.run $ room.room.post { author, text: room.draft, images: room.attachments, replyTo: room.replyTo }
-  inRoom case outcome of
-    Right _ -> _ { sending = false, draft = "", attachments = [], replyTo = Nothing }
-    Left failure -> _ { sending = false, error = Just $ Chat.describeFailure failure }
-  focusComposer
+  let token = room.token
+  let composerState = room.composer
+  modifyRoomAt token \current ->
+    if isEditing current then
+      (mapComposer (_ { status = Sending }) current) { error = Nothing }
+    else current
+  outcome <- liftAff $ Rpc.run $ room.api.post
+    { author
+    , text: composerState.draft
+    , images: composerState.attachments
+    , replyTo: composerState.replyTo
+    }
+  withRoom \current -> when (current.token == token && current.composer.status == Sending) do
+    modifyRoomAt token \latest ->
+      if latest.composer.status /= Sending then latest
+      else case outcome of
+        Right _ -> mapComposer (_ { draft = "", attachments = [], replyTo = Nothing, status = Editing }) latest
+        Left failure -> (mapComposer (_ { status = Editing }) latest) { error = Just $ Chat.describeFailure describePostError failure }
+    focusComposer
 
 pingTyping :: forall m. MonadAff m => App m Unit
-pingTyping = withRoom \room -> unless (blank room.draft) do
+pingTyping = withRoom \room -> unless (blank room.composer.draft) do
   at <- liftEffect nowMs
   when (at - room.typingSentAt > typingThrottle) do
-    inRoom _ { typingSentAt = at }
+    modifyRoomAt room.token _ { typingSentAt = at }
     { author } <- H.get
-    void $ liftAff $ Rpc.run $ room.room.typing author
+    void $ liftAff $ Rpc.run $ room.api.typing author
 
-upload :: forall m. MonadAff m => Effect (Promise (Array Int)) -> App m Unit
-upload go = do
-  inRoom _ { uploading = true, error = Nothing }
-  liftAff (attempt $ toAffE go) >>= either
-    (\error -> inRoom _ { uploading = false, error = Just $ "Upload failed: " <> message error })
-    (handle <<< Attached)
+upload :: forall m. MonadAff m => RoomToken -> Effect (Promise (Array Int)) -> App m Unit
+upload token go = do
+  modifyRoomAt token \room ->
+    if isEditing room then
+      (mapComposer (_ { status = Uploading }) room) { error = Nothing }
+    else room
+  outcome <- liftAff $ attempt $ toAffE go
+  withRoom \room -> when (room.token == token && room.composer.status == Uploading) do
+    modifyRoomAt token \current ->
+      if current.composer.status /= Uploading then current
+      else case outcome of
+        Left error -> (mapComposer (_ { status = Editing }) current) { error = Just $ "Upload failed: " <> message error }
+        Right ids -> mapComposer (\composerState -> composerState { attachments = composerState.attachments <> ids, status = Editing }) current
+
+whileEditing :: forall m. MonadAff m => (RoomView -> App m Unit) -> App m Unit
+whileEditing use = withRoom \room -> when (isEditing room) $ use room
+
+isEditing :: RoomView -> Boolean
+isEditing room = room.composer.status == Editing
+
+modifyComposer :: forall m. (ComposerState -> ComposerState) -> App m Unit
+modifyComposer update = modifyRoom $ mapComposer update
+
+mapComposer :: (ComposerState -> ComposerState) -> RoomView -> RoomView
+mapComposer update room = room { composer = update room.composer }
+
+suggestionInput :: RoomView -> { draft :: String, members :: Array String, messages :: Map.Map Int Message }
+suggestionInput room = { draft: room.composer.draft, members: room.members, messages: room.messages }
 
 focusComposer :: forall m. MonadAff m => App m Unit
 focusComposer = H.getHTMLElementRef composerRef >>= traverse_ (liftEffect <<< focus)
 
+resetFileInput :: forall m. MonadAff m => App m Unit
+resetFileInput = H.getHTMLElementRef fileRef >>= traverse_ \element ->
+  liftEffect $ traverse_ (InputElement.setValue "") $ InputElement.fromHTMLElement element
+
 replaceLastWord :: String -> String -> String
-replaceLastWord replacement draft =
-  joinWith " " (Array.dropEnd 1 words) <> (if length words > 1 then " " else "") <> replacement
-  where
-  words = split (Pattern " ") draft
+replaceLastWord replacement draft = maybe draft (\{ before } -> before <> replacement) $ mentionFocus draft
 
 errorLine :: forall w action. Maybe String -> HH.HTML w action
 errorLine = maybe (HH.text "") \why -> Status.error [ HH.text why ]

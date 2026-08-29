@@ -6,11 +6,11 @@
  *
  * @type {Effect<string>}
  */
-export const notificationPermission = () =>
+export const notificationPermissionRaw = () =>
   typeof Notification === "undefined" ? "unsupported" : Notification.permission;
 
 /** @type {AsyncEffect<string>} */
-export const requestNotifications = () =>
+export const requestNotificationsRaw = () =>
   typeof Notification === "undefined"
     ? Promise.resolve("unsupported")
     : Notification.requestPermission();

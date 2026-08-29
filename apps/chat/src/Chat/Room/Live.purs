@@ -12,7 +12,7 @@ import Ai.Model as Model
 import Ai.Provider as Provider
 import Ai.Schema as Schema
 import Markdown as Markdown
-import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), Reaction, RoomApi, RoomEvents, assistantName, maxTextLength, room)
+import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, appendMessage, assistantName, maxTextLength, room, toggleReaction)
 import Cloudflare.Durable (Handlers, Init, Live, Runtime, State)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Alarm as Alarm
@@ -24,9 +24,7 @@ import Cloudflare.Durable.Sql (Statement)
 import Cloudflare.Durable.Sql as Sql
 import Cloudflare.Durable.Storage as Storage
 import Cloudflare.Worker as Worker
-import Control.Alt ((<|>))
-import Control.Monad.Maybe.Trans (MaybeT(..), runMaybeT)
-import Data.Array (any, elem, filter, find, last, nub, null, snoc, takeEnd)
+import Data.Array (any, find, last, nub, null, takeEnd)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
 import Data.DateTime.Instant (unInstant)
@@ -38,7 +36,7 @@ import Data.Int (fromString)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
 import Data.Newtype (unwrap)
 import Data.Profunctor (lcmap)
-import Data.String (Pattern(..), contains, joinWith, length, stripPrefix, toLower, trim)
+import Data.String (Pattern(..), joinWith, length, stripPrefix, toLower, trim)
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple.Nested ((/\))
 import Data.Variant (Variant, inj)
@@ -89,8 +87,7 @@ roomLive = roomLiveWith \key -> Provider.model Provider.deepseek key Catalogue.d
 roomLiveWith :: (String -> Model Aff) -> Live "Room" RoomApi RoomEvents
 roomLiveWith modelFor = Durable.implementWith room $ map handlersFor <$> open modelFor
 
--- | Plan what the room needs, then load it. The history comes from the
--- | first source that has one: `<|>` on `MaybeT` stops at the first `Just`.
+-- | Plan what the room needs, then load it.
 open :: (String -> Model Aff) -> Init (Runtime Room)
 open modelFor = ado
   state <- Durable.state
@@ -100,8 +97,8 @@ open modelFor = ado
   in
     do
       Sql.execute state createImages unit
-      history <- runMaybeT $ MaybeT (Storage.get state messagesKey) <|> map upgrade <$> MaybeT (Storage.get state legacyKey)
-      messages <- liftEffect $ Ref.new $ fromMaybe [] history
+      history <- loadMessages state
+      messages <- liftEffect $ Ref.new history
       pure { state, messages, emit: channels sockets, assistant: modelFor <$> apiKey, search: Exa.search <$> exaKey }
 
 handlersFor :: Room -> Handlers RoomApi
@@ -135,11 +132,27 @@ upgrade :: Legacy -> Message
 upgrade m =
   { id: m.id, author: m.author, text: m.text, images: [], replyTo: Nothing, mentions: Markdown.mentions m.text, reactions: [], sentAt: m.sentAt }
 
-pendingKey :: Storage.Key (Array Int)
-pendingKey = Storage.key "assistant.pending"
+pendingKey :: Storage.Key Int
+pendingKey = Storage.key "assistant.pending.v2"
 
-keptMessages :: Int
-keptMessages = 500
+legacyPendingKey :: Storage.Key (Array Int)
+legacyPendingKey = Storage.key "assistant.pending"
+
+-- | Prefer v2 history. Persist a legacy upgrade but keep the legacy data.
+loadMessages :: State -> Runtime (Array Message)
+loadMessages state = Storage.get state messagesKey >>= case _ of
+  Just messages -> pure messages
+  Nothing -> Storage.get state legacyKey >>= case _ of
+    Nothing -> pure []
+    Just legacy -> do
+      let messages = upgrade <$> legacy
+      Storage.put state messagesKey messages
+      pure messages
+
+loadPending :: State -> Runtime (Maybe Int)
+loadPending state = Storage.get state pendingKey >>= case _ of
+  Just id -> pure $ Just id
+  Nothing -> last <<< fromMaybe [] <$> Storage.get state legacyPendingKey
 
 save :: Room -> Array Message -> Runtime Unit
 save r all = do
@@ -151,23 +164,13 @@ save r all = do
 members :: forall m. MonadRuntime m => Room -> m (Array String)
 members r = nub <<< map _.tag <$> Sockets.connected r.emit.all
 
--- | Number, stamp, store and broadcast a message.
+-- | Stamp, interpret the pure append transition, store, and broadcast.
 record :: Room -> NewMessage -> Runtime Message
 record r new = do
   sentAt <- liftEffect $ unwrap <<< unInstant <$> now
   all <- liftEffect $ Ref.read r.messages
-  let
-    message =
-      { id: maybe 1 (_.id >>> (_ + 1)) (last all)
-      , author: new.author
-      , text: new.text
-      , images: new.images
-      , replyTo: new.replyTo
-      , mentions: Markdown.mentions new.text
-      , reactions: []
-      , sentAt
-      }
-  save r $ takeEnd keptMessages $ snoc all message
+  let message /\ messages = appendMessage sentAt new all
+  save r messages
   Sockets.broadcast r.emit.message message
   pure message
 
@@ -185,32 +188,26 @@ post r new = do
     found <- Sql.first r.state imageExists id
     unless (isJust found) $ fail $ NoSuchImage id
   message <- liftRuntime $ record r new { author = author, text = body }
-  when (mentionsAssistant body && author /= assistantName) do
-    queued <- fromMaybe [] <$> Storage.get r.state pendingKey
-    Storage.put r.state pendingKey (snoc queued message.id)
+  when (toLower author /= toLower assistantName && any (\mention -> toLower mention == toLower assistantName) message.mentions) do
+    Storage.put r.state pendingKey message.id
     Alarm.scheduleIn r.state (Milliseconds 0.0)
   pure message
 
 react :: Room -> { id :: Int, emoji :: String, by :: String } -> Rpc ReactError Message
 react r { id, emoji, by } = do
-  when (trim emoji == "") $ fail EmojiRequired
+  let normalizedEmoji = trim emoji
+  let normalizedReactor = trim by
+  when (normalizedEmoji == "") $ fail EmojiRequired
+  when (normalizedReactor == "") $ fail ReactorRequired
   all <- liftEffect $ Ref.read r.messages
   case find (_.id >>> eq id) all of
     Nothing -> fail $ NoSuchMessage id
     Just found -> do
-      let message = found { reactions = toggle emoji by found.reactions }
+      let message = found { reactions = toggleReaction normalizedEmoji normalizedReactor found.reactions }
       liftRuntime do
         save r $ all <#> \m -> if m.id == id then message else m
         Sockets.broadcast r.emit.updated message
       pure message
-
--- | Flip `by` on `emoji`; a reaction nobody holds disappears.
-toggle :: String -> String -> Array Reaction -> Array Reaction
-toggle emoji by reactions = case find (_.emoji >>> eq emoji) reactions of
-  Nothing -> snoc reactions { emoji, by: [ by ] }
-  Just _ -> filter (not <<< null <<< _.by) $ reactions <#> \x ->
-    if x.emoji /= emoji then x
-    else x { by = if by `elem` x.by then filter (_ /= by) x.by else snoc x.by by }
 
 -- Images, in the room's SQLite, served by the fetch hook -------------------------
 
@@ -248,9 +245,9 @@ images state request = case Worker.method request, Worker.pathname request of
     | Just _ <- Worker.header request "content-type" >>= stripPrefix (Pattern "image/") -> do
         body <- liftAff $ Worker.bodyBase64 request
         if length body > maxImageChars then pure $ Just $ Worker.text 413 "image too large"
-        else do
-          id <- fromMaybe 0 <$> Sql.first state insertImage { mime: fromMaybe "" (Worker.header request "content-type"), data: body }
-          pure $ Just $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: CA.int }) { id }
+        else Sql.first state insertImage { mime: fromMaybe "" (Worker.header request "content-type"), data: body } <#> case _ of
+          Nothing -> Just $ Worker.text 500 "could not store image"
+          Just id -> Just $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: CA.int }) { id }
     | otherwise -> pure $ Just $ Worker.text 415 "send an image/* body"
   "GET", path | Just id <- stripPrefix (Pattern "/image/") path >>= fromString ->
     Sql.first state selectImage id <#> case _ of
@@ -259,9 +256,6 @@ images state request = case Worker.method request, Worker.pathname request of
   _, _ -> pure Nothing
 
 -- The assistant --------------------------------------------------------------------
-
-mentionsAssistant :: String -> Boolean
-mentionsAssistant = contains (Pattern ("@" <> assistantName)) <<< toLower
 
 persona :: Def String String
 persona = text $
@@ -286,16 +280,17 @@ agentFor r = r.assistant <#> \model -> mount (Model.hoist liftAff model) ([ whoI
 -- | message that mentioned the assistant.
 answer :: Room -> Runtime Unit
 answer r = do
-  pending <- fromMaybe [] <$> Storage.get r.state pendingKey
-  unless (null pending) do
+  pending <- loadPending r.state
+  for_ pending \id -> do
     void $ Storage.delete r.state pendingKey
+    void $ Storage.delete r.state legacyPendingKey
     Sockets.broadcast r.emit.typing assistantName
     transcript <- recap <<< takeEnd 20 <$> liftEffect (Ref.read r.messages)
     reply <- maybe (pure $ Left $ Model.Misconfigured "DEEPSEEK_API_KEY is not set") (_ `invoke` transcript) (agentFor r)
     void $ record r
       { author: assistantName
       , images: []
-      , replyTo: last pending
+      , replyTo: Just id
       , text: either (\failure -> "(I could not answer: " <> show failure <> ")") identity reply
       }
   where

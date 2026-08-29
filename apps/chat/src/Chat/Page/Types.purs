@@ -1,8 +1,12 @@
 module Chat.Page.Types
   ( State
   , View(..)
+  , RoomToken(..)
+  , ComposerStatus(..)
+  , ComposerState
   , RoomView
   , Locked
+  , Lobby
   , Joining
   , Action(..)
   , SessionAction(..)
@@ -10,54 +14,73 @@ module Chat.Page.Types
   , ComposerAction(..)
   , App
   , Html
-  , inRoom
+  , modifyRoom
+  , modifyRoomAt
   , withRoom
-  , _view
-  , _Locked
-  , _Joining
-  , _InRoom
+  , advanceRoomToken
   ) where
 
 import Prelude
 
 import Chat.Client (RoomId)
+import Chat.Page.Browser (NotificationPermission, TimeFormatter)
 import Chat.Room (Message, RoomApi, RoomEvents)
 import Cloudflare.Durable (Signal)
-import Data.Foldable (traverse_)
-import Data.Lens (Lens', Prism', over, preview, prism')
-import Data.Lens.Record (prop)
 import Data.Map (Map)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe)
 import Data.Variant (Variant)
 import Halogen as H
-import Type.Proxy (Proxy(..))
+import Web.Clipboard.ClipboardEvent (ClipboardEvent)
 import Web.Event.Event (Event)
+import Web.File.File (File)
 import Web.UIEvent.KeyboardEvent (KeyboardEvent)
 
 type State =
   { author :: String
-  , notifications :: String
+  , formatTime :: TimeFormatter
+  , notifications :: NotificationPermission
+  , nextRoomToken :: RoomToken
   , view :: View
   }
 
 data View
-  = Locked Locked
-  | Lobby { busy :: Boolean }
+  = Loading
+  | LoadFailed String
+  | Locked Locked
+  | Lobby Lobby
   | Joining Joining
   | InRoom RoomView
 
+newtype RoomToken = RoomToken Int
+
+derive newtype instance Eq RoomToken
+
+data ComposerStatus
+  = Editing
+  | Uploading
+  | Sending
+
+derive instance Eq ComposerStatus
+
+type ComposerState =
+  { draft :: String
+  , replyTo :: Maybe Int
+  , attachments :: Array Int
+  , status :: ComposerStatus
+  }
+
 type Locked = { passkey :: String, error :: Maybe String, busy :: Boolean }
+
+type Lobby = { busy :: Boolean, error :: Maybe String }
 
 type Joining = { id :: RoomId, name :: String }
 
 type RoomView =
-  { id :: RoomId
-  , room :: Record RoomApi
-  , link :: String
-  , draft :: String
-  , replyTo :: Maybe Int
-  , attachments :: Array Int
-  , uploading :: Boolean
+  { token :: RoomToken
+  , id :: RoomId
+  , api :: Record RoomApi
+  , shareUrl :: String
+  , composer :: ComposerState
   , messages :: Map Int Message
   , feed :: H.SubscriptionId
   , ticker :: H.SubscriptionId
@@ -67,7 +90,6 @@ type RoomView =
   , typingSentAt :: Number
   , unread :: Int
   , error :: Maybe String
-  , sending :: Boolean
   , copied :: Boolean
   }
 
@@ -75,8 +97,6 @@ data Action
   = Session SessionAction
   | Room RoomAction
   | Composer ComposerAction
-  | Tick
-  | Notified (Signal (Variant RoomEvents))
 
 data SessionAction
   = Initialize
@@ -93,14 +113,16 @@ data RoomAction
   | Leave
   | JumpTo Int
   | React Int String
+  | Tick RoomToken
+  | Notified RoomToken (Signal (Variant RoomEvents))
 
 data ComposerAction
   = SetDraft String
   | KeyDown KeyboardEvent
-  | Pasted Event
+  | Pasted ClipboardEvent
   | PickMention String
   | Attach
-  | Attached (Array Int)
+  | SelectedFiles (Array File)
   | Detach Int
   | Reply (Maybe Int)
   | Submit Event
@@ -109,26 +131,24 @@ type App m = H.HalogenM State Action () Void m
 
 type Html m = H.ComponentHTML Action () m
 
-_view :: Lens' State View
-_view = prop (Proxy :: Proxy "view")
+modifyRoom :: forall m. (RoomView -> RoomView) -> App m Unit
+modifyRoom update = H.modify_ \state -> state
+  { view = case state.view of
+      InRoom room -> InRoom $ update room
+      view -> view
+  }
 
-_Locked :: Prism' View Locked
-_Locked = prism' Locked case _ of
-  Locked l -> Just l
-  _ -> Nothing
-
-_Joining :: Prism' View Joining
-_Joining = prism' Joining case _ of
-  Joining j -> Just j
-  _ -> Nothing
-
-_InRoom :: Prism' View RoomView
-_InRoom = prism' InRoom case _ of
-  InRoom r -> Just r
-  _ -> Nothing
-
-inRoom :: forall m. (RoomView -> RoomView) -> App m Unit
-inRoom = H.modify_ <<< over (_view <<< _InRoom)
+modifyRoomAt :: forall m. RoomToken -> (RoomView -> RoomView) -> App m Unit
+modifyRoomAt token update = H.modify_ \state -> state
+  { view = case state.view of
+      InRoom room | room.token == token -> InRoom $ update room
+      view -> view
+  }
 
 withRoom :: forall m. (RoomView -> App m Unit) -> App m Unit
-withRoom k = H.gets (preview (_view <<< _InRoom)) >>= traverse_ k
+withRoom use = H.get >>= \state -> case state.view of
+  InRoom room -> use room
+  _ -> pure unit
+
+advanceRoomToken :: RoomToken -> RoomToken
+advanceRoomToken (RoomToken token) = RoomToken (token + 1)

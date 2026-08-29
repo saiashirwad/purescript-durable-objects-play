@@ -1,5 +1,7 @@
 module Chat.Page.Browser
-  ( formatTime
+  ( NotificationPermission(..)
+  , TimeFormatter
+  , timeFormatter
   , nearBottom
   , scrollToEnd
   , scrollToId
@@ -17,17 +19,20 @@ module Chat.Page.Browser
 
 import Prelude
 
-import Control.Promise (Promise)
+import Control.Monad.Error.Class (catchError)
+import Control.Promise (Promise, toAffE)
 import Data.DateTime.Instant (instant, unInstant)
 import Data.Foldable (traverse_)
-import Data.Maybe (maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Data.Newtype (unwrap)
 import Data.Time.Duration (Milliseconds(..))
 import Effect (Effect)
+import Effect.Aff (Aff)
+import Effect.Class (liftEffect)
 import Effect.Now (now)
 import Effect.Timer (clearInterval, setInterval)
-import Effect.Unsafe (unsafePerformEffect)
 import JS.Intl.DateTimeFormat as DateTimeFormat
+import Promise.Aff as Promise
 import Web.Clipboard (clipboard, writeText)
 import Web.DOM.Element (Element, clientHeight, scrollHeight, scrollTop, setScrollTop)
 import Web.DOM.NonElementParentNode (getElementById)
@@ -40,13 +45,21 @@ import Web.HTML.Location as Location
 import Web.HTML.Window as Window
 import Web.Storage.Storage as Storage
 
--- | A clock time like `09:41` (or `09:41 AM`), in the reader's locale.
-formatTime :: Number -> String
-formatTime ms = maybe "" (DateTimeFormat.format clock) (instant (Milliseconds ms))
+data NotificationPermission
+  = Default
+  | Granted
+  | Denied
+  | Unsupported
 
--- One formatter for the page; building it is the only effect, and it is pure after that.
-clock :: DateTimeFormat.DateTimeFormat
-clock = unsafePerformEffect $ DateTimeFormat.new [] { hour: "2-digit", minute: "2-digit" }
+derive instance Eq NotificationPermission
+
+type TimeFormatter = Number -> String
+
+-- | Make a locale clock formatter once for the page.
+timeFormatter :: Effect TimeFormatter
+timeFormatter = do
+  clock <- DateTimeFormat.new [] { hour: "2-digit", minute: "2-digit" }
+  pure \ms -> maybe "" (DateTimeFormat.format clock) (instant (Milliseconds ms))
 
 nearBottom :: HTMLElement -> Effect Boolean
 nearBottom el = do
@@ -68,10 +81,15 @@ scrollToId id = do
   document <- toNonElementParentNode <$> (Window.document =<< window)
   getElementById id document >>= traverse_ reveal
 
-copyText :: String -> Effect Unit
+copyText :: String -> Aff Boolean
 copyText text = do
-  navigator <- Window.navigator =<< window
-  clipboard navigator >>= traverse_ (void <<< writeText text)
+  navigator <- liftEffect $ Window.navigator =<< window
+  target <- liftEffect $ clipboard navigator
+  case target of
+    Nothing -> pure false
+    Just board -> catchError
+      (Promise.toAffE (writeText text board) $> true)
+      (const $ pure false)
 
 -- | Call `push` every `ms`; the result stops it.
 interval :: Int -> (Unit -> Effect Unit) -> Effect (Effect Unit)
@@ -100,7 +118,20 @@ localStorage = Window.localStorage =<< window
 -- What no PureScript library covers yet: Notifications, `document.hasFocus`,
 -- `scrollIntoView` with options, and the Web Animations API.
 foreign import notify :: { title :: String, body :: String, tag :: String } -> Effect Unit
-foreign import notificationPermission :: Effect String
-foreign import requestNotifications :: Effect (Promise String)
+foreign import notificationPermissionRaw :: Effect String
+foreign import requestNotificationsRaw :: Effect (Promise String)
 foreign import hasFocus :: Effect Boolean
 foreign import reveal :: Element -> Effect Unit
+
+notificationPermission :: Effect NotificationPermission
+notificationPermission = decodePermission <$> notificationPermissionRaw
+
+requestNotifications :: Aff NotificationPermission
+requestNotifications = decodePermission <$> toAffE requestNotificationsRaw
+
+decodePermission :: String -> NotificationPermission
+decodePermission = case _ of
+  "default" -> Default
+  "granted" -> Granted
+  "denied" -> Denied
+  _ -> Unsupported

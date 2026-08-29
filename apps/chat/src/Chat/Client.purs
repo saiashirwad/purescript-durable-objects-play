@@ -59,9 +59,9 @@ parseRoomId (Chat rooms) raw =
   in
     if null text then Nothing else Just $ Durable.idFromString rooms text
 
-describeFailure :: forall e. Show e => RpcFailure e -> String
-describeFailure = case _ of
-  DomainError e -> show e
+describeFailure :: forall e. (e -> String) -> RpcFailure e -> String
+describeFailure describeDomain = case _ of
+  DomainError e -> describeDomain e
   PlatformError e -> "The server could not do that: " <> show e
   TransportError message -> "Could not reach the server: " <> message
   DecodeError message -> "The server sent something unexpected: " <> message

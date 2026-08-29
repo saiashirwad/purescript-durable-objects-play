@@ -10,7 +10,6 @@ package:
     - cloudflare-worker
     - codec-argonaut
     - contravariant
-    - control
     - datetime
     - effect
     - either
@@ -21,6 +20,7 @@ package:
     - halogen-subscriptions
     - integers
     - js-intl
+    - js-promise-aff
     - js-timers
     - markdown
     - maybe
@@ -29,7 +29,6 @@ package:
     - ordered-collections
     - prelude
     - profunctor
-    - profunctor-lenses
     - refs
     - strings
     - transformers
@@ -39,6 +38,7 @@ package:
     - web-clipboard
     - web-dom
     - web-events
+    - web-file
     - web-html
     - web-storage
     - web-uievents

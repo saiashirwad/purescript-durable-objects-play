@@ -1,16 +1,18 @@
 // @ts-check
-// Image attachments: pick or paste, shrink, upload. Canvas and the file
-// dialog have no PureScript binding, so this stays JS.
+// Image attachments: shrink and upload. Canvas encoding and Blob request
+// bodies have no complete PureScript binding, so this stays JS.
 
 /**
- * Shrink to at most 1600px on the long side, as JPEG unless it has alpha.
+ * Shrink to at most 1600px on the long side. Keep alpha-capable raster types.
+ * Keep animated GIF and vector SVG files unchanged.
  * Falls back to the original file whenever the browser cannot decode or encode it.
  *
  * @param {File} file
  * @returns {Promise<Blob>}
  */
-const shrink = (file) =>
-  new Promise((resolve) => {
+const shrink = (file) => {
+  if (file.type === "image/gif" || file.type === "image/svg+xml") return Promise.resolve(file);
+  return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
@@ -23,12 +25,30 @@ const shrink = (file) =>
       const context = canvas.getContext("2d");
       if (!context) return resolve(file);
       context.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const type = file.type === "image/png" ? "image/png" : "image/jpeg";
+      const type = ["image/png", "image/webp", "image/avif"].includes(file.type) ? file.type : "image/jpeg";
       canvas.toBlob((blob) => resolve(blob ?? file), type, 0.86);
     };
     img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
     img.src = url;
   });
+};
+
+/**
+ * Read an image id from an upload response.
+ *
+ * @param {unknown} value
+ * @returns {number}
+ */
+const imageId = (value) => {
+  if (typeof value !== "object" || value === null || !("id" in value)) {
+    throw new Error("upload failed: response has no image id");
+  }
+  const id = value.id;
+  if (typeof id !== "number" || !Number.isInteger(id) || id < 1 || id > 2_147_483_647) {
+    throw new Error("upload failed: image id is not a positive 32-bit integer");
+  }
+  return id;
+};
 
 /**
  * Upload each image in turn; the ids the server assigns, in order.
@@ -45,37 +65,17 @@ const upload = async (endpoint, files) => {
     const blob = await shrink(file);
     const response = await fetch(endpoint, { method: "POST", headers: { "content-type": blob.type }, body: blob });
     if (!response.ok) throw new Error(`upload failed: HTTP ${response.status}`);
-    const { id } = /** @type {{ id: number }} */ (await response.json());
-    ids.push(id);
+    // Response.json returns any, so keep the server value unknown until imageId checks it.
+    const body = /** @type {unknown} */ (await response.json());
+    ids.push(imageId(body));
   }
   return ids;
 };
 
 /**
- * Open the file dialog; resolve with the uploaded image ids.
+ * Upload files that PureScript selected from the dialog or clipboard.
  *
  * @param {string} endpoint
- * @returns {AsyncEffect<number[]>}
+ * @returns {(files: File[]) => AsyncEffect<number[]>}
  */
-export const pickAndUpload = (endpoint) => () =>
-  new Promise((resolve, reject) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.multiple = true;
-    input.onchange = () => upload(endpoint, Array.from(input.files ?? [])).then(resolve, reject);
-    input.oncancel = () => resolve([]);
-    input.click();
-  });
-
-/**
- * Images on the clipboard of a paste event, uploaded. Empty when it was text.
- *
- * @param {string} endpoint
- * @returns {(event: ClipboardEvent) => AsyncEffect<number[]>}
- */
-export const uploadPasted = (endpoint) => (event) => () => {
-  const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
-  if (files.length > 0) event.preventDefault();
-  return upload(endpoint, files);
-};
+export const uploadFiles = (endpoint) => (files) => () => upload(endpoint, files);

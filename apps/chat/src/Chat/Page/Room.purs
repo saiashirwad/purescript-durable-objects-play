@@ -12,11 +12,11 @@ import Prelude
 
 import Chat.Client (RoomId)
 import Chat.Client as Chat
-import Chat.Page.Browser (away, copyText, interval, location, nearBottom, notify, nowMs, scrollToEnd, scrollToId, setTitle)
+import Chat.Page.Browser (NotificationPermission(..), away, copyText, interval, location, nearBottom, notify, nowMs, scrollToEnd, scrollToId, setTitle)
 import Chat.Page.Icons (bellIcon, linkIcon)
 import Chat.Page.Shared (avatar, blank, quiet, small)
-import Chat.Page.Types (Action(..), App, RoomAction(..), RoomView, State, View(..), inRoom, withRoom)
-import Chat.Room (Message, RoomEvents)
+import Chat.Page.Types (Action(..), App, ComposerStatus(..), RoomAction(..), RoomToken, RoomView, View(..), advanceRoomToken, modifyRoomAt, withRoom)
+import Chat.Room (Message, RoomEvents, describeReactError)
 import Chat.Style (styles)
 import Cloudflare.Durable (Signal(..))
 import Cloudflare.Durable.Rpc as Rpc
@@ -55,10 +55,15 @@ type ViewActions action =
   , leave :: action
   }
 
+type HeaderState =
+  { author :: String
+  , notifications :: NotificationPermission
+  }
+
 messagesRef :: H.RefLabel
 messagesRef = H.RefLabel "messages"
 
-roomView :: forall action w. ViewActions action -> State -> RoomView -> HH.HTML w action -> HH.HTML w action -> HH.HTML w action
+roomView :: forall action w. ViewActions action -> HeaderState -> RoomView -> HH.HTML w action -> HH.HTML w action -> HH.HTML w action
 roomView actions state room messages composer =
   HH.main [ css styles.room, HP.ref messagesRef ]
     [ HH.header [ css styles.header ]
@@ -69,7 +74,7 @@ roomView actions state room messages composer =
     , composer
     ]
 
-roomTitle :: forall action w. ViewActions action -> State -> RoomView -> HH.HTML w action
+roomTitle :: forall action w. ViewActions action -> HeaderState -> RoomView -> HH.HTML w action
 roomTitle actions { notifications } room =
   HH.div [ css styles.headerGroup ] $
     [ HH.span [ css $ styles.presence <> guard room.online styles.online, ARIA.hidden "true" ] []
@@ -78,12 +83,12 @@ roomTitle actions { notifications } room =
     , HH.span [ css styles.count, ARIA.role "status", ARIA.live "polite" ] [ HH.text $ onlineLabel room ]
     , Button.button small [ HE.onClick \_ -> actions.copyLink ]
         [ Icon.render linkIcon, HH.text if room.copied then "Copied" else "Copy link" ]
-    ] <> guard (notifications == "default")
+    ] <> guard (notifications == Default)
       [ Button.button small [ HE.onClick \_ -> actions.enableNotifications ]
           [ Icon.render bellIcon, HH.text "Notify me" ]
       ]
 
-roomPeople :: forall action w. ViewActions action -> State -> RoomView -> HH.HTML w action
+roomPeople :: forall action w. ViewActions action -> HeaderState -> RoomView -> HH.HTML w action
 roomPeople actions { author } room =
   HH.div [ css styles.headerGroup ]
     [ HH.div [ css styles.members, ARIA.label $ "People online: " <> joinWith ", " room.members ] $
@@ -122,33 +127,44 @@ handle :: forall m. MonadAff m => RoomAction -> App m Unit
 handle = case _ of
   Leave -> do
     liftEffect $ Location.setHash "" =<< location
-    leaveRoom \_ state -> state { view = Lobby { busy: false } }
-  CopyLink -> withRoom \room -> liftEffect (copyText room.link) *> inRoom _ { copied = true }
+    leaveRoom $ const $ Lobby { busy: false, error: Nothing }
+  CopyLink -> withRoom \room -> do
+    copied <- liftAff $ copyText room.shareUrl
+    when copied $ modifyRoomAt room.token _ { copied = true }
   JumpTo id -> liftEffect $ scrollToId $ "msg-" <> show id
   React id emoji -> withRoom \room -> do
     { author } <- H.get
-    liftAff (Rpc.run $ room.room.react { id, emoji, by: author }) >>= either
-      (\failure -> inRoom _ { error = Just $ Chat.describeFailure failure })
-      (\message -> inRoom \view -> view { messages = Map.insert message.id message view.messages })
+    outcome <- liftAff $ Rpc.run $ room.api.react { id, emoji, by: author }
+    either
+      (\failure -> modifyRoomAt room.token _ { error = Just $ Chat.describeFailure describeReactError failure })
+      (\message -> modifyRoomAt room.token \view -> view { messages = Map.insert message.id message view.messages })
+      outcome
+  Tick token -> tick token
+  Notified token signal -> onSignal token signal
 
-enter :: forall m. MonadAff m => App m Unit -> RoomId -> App m Unit
-enter focusComposer id = do
+enter :: forall m. MonadAff m => RoomId -> App m Unit
+enter id = do
   liftEffect $ Location.setHash (Chat.printRoomId id) =<< location
-  { author } <- H.get
-  if blank author then H.modify_ _ { view = Joining { id, name: "" } }
+  state <- H.get
+  if blank state.author then H.modify_ _ { view = Joining { id, name: "" } }
   else do
-    link <- liftEffect $ Location.href =<< location
-    feed <- H.subscribe $ Notified <$> Chat.listen Chat.rpc id author
-    ticker <- H.subscribe $ Tick <$ makeEmitter (interval 1000)
+    let token = state.nextRoomToken
+    H.modify_ _ { nextRoomToken = advanceRoomToken token }
+    shareUrl <- liftEffect $ Location.href =<< location
+    feed <- H.subscribe $ (Room <<< Notified token) <$> Chat.listen Chat.rpc id state.author
+    ticker <- H.subscribe $ Room (Tick token) <$ makeEmitter (interval 1000)
     H.modify_ _
       { view = InRoom
-          { id
-          , room: Chat.open Chat.rpc id
-          , link
-          , draft: ""
-          , replyTo: Nothing
-          , attachments: []
-          , uploading: false
+          { token
+          , id
+          , api: Chat.open Chat.rpc id
+          , shareUrl
+          , composer:
+              { draft: ""
+              , replyTo: Nothing
+              , attachments: []
+              , status: Editing
+              }
           , messages: Map.empty
           , feed
           , ticker
@@ -158,75 +174,96 @@ enter focusComposer id = do
           , typingSentAt: 0.0
           , unread: 0
           , error: Nothing
-          , sending: false
           , copied: false
           }
       }
-    focusComposer
 
-leaveRoom :: forall m. MonadAff m => (RoomView -> State -> State) -> App m Unit
+leaveRoom :: forall m. MonadAff m => (RoomView -> View) -> App m Unit
 leaveRoom next = withRoom \room -> do
   H.unsubscribe room.feed
   H.unsubscribe room.ticker
-  H.modify_ $ next room
+  H.modify_ _ { view = next room }
 
-onSignal :: forall m. MonadAff m => Signal (Variant RoomEvents) -> App m Unit
-onSignal = case _ of
-  Opened -> inRoom _ { online = true, error = Nothing } *> reload
-  Closed -> inRoom _ { online = false }
-  Garbled why -> inRoom _ { error = Just $ "Unreadable event: " <> why }
+onSignal :: forall m. MonadAff m => RoomToken -> Signal (Variant RoomEvents) -> App m Unit
+onSignal token signal = withRoomAt token $ const $ case signal of
+  Opened -> modifyRoomAt token _ { online = true, error = Nothing } *> reload token
+  Closed -> modifyRoomAt token _ { online = false }
+  Garbled why -> modifyRoomAt token _ { error = Just $ "Unreadable event: " <> why }
   Delivered event -> event # match
-    { message: onMessage
-    , updated: \message -> inRoom \room -> room { messages = Map.insert message.id message room.messages }
-    , joined: \_ -> reload
-    , left: \name -> inRoom (\room -> room { typing = Map.delete name room.typing }) *> reload
+    { message: onMessage token
+    , updated: \message -> modifyRoomAt token \room -> room { messages = Map.insert message.id message room.messages }
+    , joined: \_ -> reload token
+    , left: \name -> modifyRoomAt token (\room -> room { typing = Map.delete name room.typing }) *> reload token
     , typing: \name -> do
         { author } <- H.get
         at <- liftEffect nowMs
-        when (name /= author) $ inRoom \room -> room { typing = Map.insert name at room.typing }
+        when (name /= author) $ modifyRoomAt token \room -> room { typing = Map.insert name at room.typing }
     }
 
-onMessage :: forall m. MonadAff m => Message -> App m Unit
-onMessage message = do
+onMessage :: forall m. MonadAff m => RoomToken -> Message -> App m Unit
+onMessage token message = do
   pinned <- withMessages nearBottom
-  inRoom \room -> room { messages = Map.insert message.id message room.messages, typing = Map.delete message.author room.typing }
+  modifyRoomAt token \room -> room
+    { messages = Map.insert message.id message room.messages
+    , typing = Map.delete message.author room.typing
+    }
   { author } <- H.get
-  when (fromMaybe true pinned || message.author == author) $ void $ withMessages scrollToEnd
-  when (message.author /= author) $ announce message (author `elem` message.mentions)
+  when (fromMaybe true pinned || message.author == author)
+    $ withRoomAt token
+    $ const
+    $ void
+    $ withMessages scrollToEnd
+  when (message.author /= author) $ announce token message (author `elem` message.mentions)
 
-announce :: forall m. MonadAff m => Message -> Boolean -> App m Unit
-announce message mentioned = do
+announce :: forall m. MonadAff m => RoomToken -> Message -> Boolean -> App m Unit
+announce token message mentioned = do
   gone <- liftEffect away
   when (gone || mentioned) do
-    inRoom \room -> room { unread = room.unread + 1 }
+    modifyRoomAt token \room -> room { unread = room.unread + 1 }
     state <- H.get
-    withRoom \room -> liftEffect do
+    withRoomAt token \room -> liftEffect do
       when gone $ setTitle $ "(" <> show room.unread <> ") Chat"
-      when (state.notifications == "granted") $ notify
+      when (state.notifications == Granted) $ notify
         { title: (if mentioned then "@" <> state.author <> " · " else "") <> message.author
         , body: String.take 200 (Markdown.plain message.text)
         , tag: "room-" <> Chat.printRoomId room.id
         }
 
-reload :: forall m. MonadAff m => App m Unit
-reload = withRoom \room -> do
+reload :: forall m. MonadAff m => RoomToken -> App m Unit
+reload token = withRoomAt token \room -> do
+  pinned <- withMessages nearBottom
   outcome <- liftAff $ Rpc.run do
-    messages <- Rpc.infallible $ room.room.history unit
-    members <- room.room.members unit
+    messages <- Rpc.infallible $ room.api.history unit
+    members <- room.api.members unit
     pure { messages, members }
-  either (\failure -> inRoom _ { error = Just $ Chat.describeFailure failure }) loaded outcome
+  either
+    (\failure -> modifyRoomAt token _ { error = Just $ Chat.describeFailure absurd failure })
+    ( \{ messages, members } -> do
+        modifyRoomAt token \current -> current
+          { messages = Map.union current.messages (byId messages)
+          , members = members
+          }
+        when (fromMaybe false pinned)
+          $ withRoomAt token
+          $ const
+          $ void
+          $ withMessages scrollToEnd
+    )
+    outcome
 
-loaded :: forall m. MonadAff m => { messages :: Array Message, members :: Array String } -> App m Unit
-loaded { messages, members } = do
-  inRoom \room -> room { messages = Map.union room.messages (byId messages), members = members }
-  void $ withMessages scrollToEnd
-
-tick :: forall m. MonadAff m => App m Unit
-tick = do
+tick :: forall m. MonadAff m => RoomToken -> App m Unit
+tick token = withRoomAt token $ const do
   at <- liftEffect nowMs
-  inRoom \room -> room { typing = Map.filter (\seen -> at - seen < typingTtl) room.typing }
+  modifyRoomAt token \room -> room { typing = Map.filter (\seen -> at - seen < typingTtl) room.typing }
   here <- liftEffect $ not <$> away
-  when here $ inRoom _ { unread = 0 } *> liftEffect (setTitle "Chat")
+  when here $ withRoomAt token $ const do
+    modifyRoomAt token _ { unread = 0 }
+    liftEffect $ setTitle "Chat"
+
+withRoomAt :: forall m. RoomToken -> (RoomView -> App m Unit) -> App m Unit
+withRoomAt token use = H.get >>= \state -> case state.view of
+  InRoom room | room.token == token -> use room
+  _ -> pure unit
 
 withMessages :: forall a m. MonadAff m => (HTMLElement -> Effect a) -> App m (Maybe a)
 withMessages action = H.getHTMLElementRef messagesRef >>= traverse (liftEffect <<< action)

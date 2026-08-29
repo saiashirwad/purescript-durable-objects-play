@@ -1,5 +1,6 @@
 module Chat.Page.Messages
-  ( messageList
+  ( ThreadPosition(..)
+  , messageList
   , emptyRoom
   , messageItem
   , markdown
@@ -9,10 +10,10 @@ module Chat.Page.Messages
 
 import Prelude
 
-import Chat.Page.Browser (formatTime)
+import Chat.Client (RoomId)
+import Chat.Page.Browser (TimeFormatter)
 import Chat.Page.Icons (replyIcon)
 import Chat.Page.Shared (avatar, imageUrl, quiet)
-import Chat.Page.Types (RoomView)
 import Chat.Room (Message, assistantName)
 import Chat.Style (styles)
 import Data.Array (elem, length, zip)
@@ -41,11 +42,23 @@ type Actions action =
   , reply :: Maybe Int -> action
   }
 
-messageList :: forall action w. Actions action -> String -> RoomView -> HH.HTML w action
-messageList actions author room =
+type MessageRoom row =
+  { id :: RoomId
+  , messages :: Map.Map Int Message
+  | row
+  }
+
+data ThreadPosition
+  = StartsThread
+  | ContinuesThread
+
+derive instance eqThreadPosition :: Eq ThreadPosition
+
+messageList :: forall action w row. Actions action -> TimeFormatter -> String -> MessageRoom row -> HH.HTML w action
+messageList actions formatTime author room =
   HH.ol [ css styles.list, ARIA.label "Messages" ]
     if Map.isEmpty room.messages then [ emptyRoom ]
-    else messageItem actions author room <$> threaded (Array.fromFoldable room.messages)
+    else messageItem actions formatTime author room <$> threaded (Array.fromFoldable room.messages)
 
 emptyRoom :: forall action w. HH.HTML w action
 emptyRoom =
@@ -54,8 +67,8 @@ emptyRoom =
     , HH.p [ css styles.muted ] [ HH.text "Share the link and say hello." ]
     ]
 
-messageItem :: forall action w. Actions action -> String -> RoomView -> Tuple Boolean Message -> HH.HTML w action
-messageItem actions author room (Tuple continued message) =
+messageItem :: forall action w row. Actions action -> TimeFormatter -> String -> MessageRoom row -> Tuple ThreadPosition Message -> HH.HTML w action
+messageItem actions formatTime author room (Tuple position message) =
   HH.li
     [ HP.id $ "msg-" <> show message.id
     , css $ styles.message <> guard mine styles.mine <> guard continued styles.continued
@@ -64,6 +77,7 @@ messageItem actions author room (Tuple continued message) =
     $ guard (not mine) [ if continued then HH.span [ css styles.gutter, ARIA.hidden "true" ] [] else avatar (guard bot styles.botAvatar) message.author ]
         <> [ HH.div [ css styles.stack ] [ bubble, reactions, actionBar ] ]
   where
+  continued = position == ContinuesThread
   mine = message.author == author
   bot = message.author == assistantName
   mentioned = author `elem` message.mentions
@@ -135,13 +149,14 @@ markdown me mine = map block <<< Markdown.parse
     Mention name ->
       HH.span [ css $ styles.mention <> guard mine styles.mineMention <> guard (name == me) styles.selfMention ]
         [ HH.text $ "@" <> name ]
-  safe url = Array.any (\scheme -> isJust $ stripPrefix (Pattern scheme) url) [ "https://", "http://", "mailto:" ]
+  safe url = Array.any (\scheme -> isJust $ stripPrefix (Pattern scheme) (String.toLower url)) [ "https://", "http://", "mailto:" ]
 
-threaded :: Array Message -> Array (Tuple Boolean Message)
-threaded messages = zip ([ false ] <> (continues <$> zip messages (Array.drop 1 messages))) messages
+threaded :: Array Message -> Array (Tuple ThreadPosition Message)
+threaded messages = zip ([ StartsThread ] <> (position <$> zip messages (Array.drop 1 messages))) messages
   where
-  continues (Tuple previous next) =
-    previous.author == next.author && next.sentAt - previous.sentAt < threadWindow && next.replyTo == Nothing
+  position (Tuple previous next)
+    | previous.author == next.author && next.sentAt - previous.sentAt < threadWindow && next.replyTo == Nothing = ContinuesThread
+    | otherwise = StartsThread
 
 -- | How close two messages must be in time for one to continue the other.
 threadWindow :: Number

@@ -6,9 +6,13 @@ module Chat.Room
   , Reaction
   , RoomApi
   , RoomEvents
+  , appendMessage
   , assistantName
+  , describePostError
+  , describeReactError
   , maxTextLength
   , room
+  , toggleReaction
   ) where
 
 import Prelude
@@ -17,12 +21,14 @@ import Cloudflare.Durable (Object)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Codec (class HasCodec)
 import Cloudflare.Durable.Rpc (NoError, Rpc, method)
+import Data.Array (elem, filter, find, last, null, snoc, takeEnd)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.Tuple (Tuple)
 import Data.Tuple.Nested ((/\))
+import Markdown as Markdown
 
 type Reaction = { emoji :: String, by :: Array String }
 
@@ -61,6 +67,14 @@ instance showPostError :: Show PostError where
     NoSuchReply id -> "(NoSuchReply " <> show id <> ")"
     NoSuchImage id -> "(NoSuchImage " <> show id <> ")"
 
+describePostError :: PostError -> String
+describePostError = case _ of
+  AuthorRequired -> "Enter your name."
+  TextRequired -> "Write a message or attach an image."
+  TextTooLong -> "The message is too long."
+  NoSuchReply _ -> "The message you replied to is not available."
+  NoSuchImage _ -> "An attached image is not available."
+
 -- | `{ tag, id }` on the wire; a sum with at most one `Int` payload needs no
 -- | more. `prismaticCodec` is the codec of a partial isomorphism: every
 -- | value prints, only well-formed wire values read.
@@ -74,14 +88,14 @@ instance hasCodecPostError :: HasCodec PostError where
       NoSuchReply id -> "NoSuchReply" /\ Just id
       NoSuchImage id -> "NoSuchImage" /\ Just id
     read = case _ of
-      "AuthorRequired" /\ _ -> Just AuthorRequired
-      "TextRequired" /\ _ -> Just TextRequired
-      "TextTooLong" /\ _ -> Just TextTooLong
+      "AuthorRequired" /\ Nothing -> Just AuthorRequired
+      "TextRequired" /\ Nothing -> Just TextRequired
+      "TextTooLong" /\ Nothing -> Just TextTooLong
       "NoSuchReply" /\ Just id -> Just (NoSuchReply id)
       "NoSuchImage" /\ Just id -> Just (NoSuchImage id)
       _ -> Nothing
 
-data ReactError = NoSuchMessage Int | EmojiRequired
+data ReactError = NoSuchMessage Int | EmojiRequired | ReactorRequired
 
 derive instance eqReactError :: Eq ReactError
 
@@ -89,6 +103,13 @@ instance showReactError :: Show ReactError where
   show = case _ of
     NoSuchMessage id -> "(NoSuchMessage " <> show id <> ")"
     EmojiRequired -> "EmojiRequired"
+    ReactorRequired -> "ReactorRequired"
+
+describeReactError :: ReactError -> String
+describeReactError = case _ of
+  NoSuchMessage _ -> "That message is not available."
+  EmojiRequired -> "Select a reaction."
+  ReactorRequired -> "Enter your name."
 
 instance hasCodecReactError :: HasCodec ReactError where
   codec = tagged "ReactError" print read
@@ -96,9 +117,11 @@ instance hasCodecReactError :: HasCodec ReactError where
     print = case _ of
       NoSuchMessage id -> "NoSuchMessage" /\ Just id
       EmojiRequired -> "EmojiRequired" /\ Nothing
+      ReactorRequired -> "ReactorRequired" /\ Nothing
     read = case _ of
       "NoSuchMessage" /\ Just id -> Just (NoSuchMessage id)
-      "EmojiRequired" /\ _ -> Just EmojiRequired
+      "EmojiRequired" /\ Nothing -> Just EmojiRequired
+      "ReactorRequired" /\ Nothing -> Just ReactorRequired
       _ -> Nothing
 
 tagged :: forall a. String -> (a -> Tuple String (Maybe Int)) -> (Tuple String (Maybe Int) -> Maybe a) -> JsonCodec a
@@ -110,6 +133,29 @@ tagged name print read =
 
 maxTextLength :: Int
 maxTextLength = 4000
+
+-- | Add one message and return it with the retained room history.
+appendMessage :: Number -> NewMessage -> Array Message -> Tuple Message (Array Message)
+appendMessage sentAt new all = message /\ takeEnd 500 (snoc all message)
+  where
+  message =
+    { id: maybe 1 (_.id >>> (_ + 1)) (last all)
+    , author: new.author
+    , text: new.text
+    , images: new.images
+    , replyTo: new.replyTo
+    , mentions: Markdown.mentions new.text
+    , reactions: []
+    , sentAt
+    }
+
+-- | Flip a reactor on an emoji. Remove a reaction when no reactor remains.
+toggleReaction :: String -> String -> Array Reaction -> Array Reaction
+toggleReaction emoji by reactions = case find (_.emoji >>> eq emoji) reactions of
+  Nothing -> snoc reactions { emoji, by: [ by ] }
+  Just _ -> filter (not <<< null <<< _.by) $ reactions <#> \reaction ->
+    if reaction.emoji /= emoji then reaction
+    else reaction { by = if by `elem` reaction.by then filter (_ /= by) reaction.by else snoc reaction.by by }
 
 type RoomApi =
   ( post :: NewMessage -> Rpc PostError Message
