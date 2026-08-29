@@ -107,8 +107,8 @@ main = launchAff_ do
     after <- Rpc.run $ chat.snapshot unit
     ann <- liftEffect $ Ref.read annLog
     bob <- liftEffect $ Ref.read bobLog
-    pure $ ann == [ "opened", "presence [\"ann\"]", "presence [\"ann\",\"bob\"]", "typing bob", "message hi", "presence [\"ann\"]" ]
-      && bob == [ "opened", "presence [\"ann\",\"bob\"]", "typing bob", "message hi", "closed" ]
+    pure $ ann == [ "opened", """presence ["ann"]""", """presence ["ann","bob"]""", "typing bob", "message hi", """presence ["ann"]""" ]
+      && bob == [ "opened", """presence ["ann","bob"]""", "typing bob", "message hi", "closed" ]
       && map _.presence current == Right [ "ann", "bob" ]
       && map _.presence after == Right [ "ann" ]
 
@@ -126,7 +126,7 @@ main = launchAff_ do
     seen <- liftEffect $ Ref.read secondLog
     liftEffect stopSecond
     pure $ map _.presence after == Right [ "ann" ]
-      && Array.length (Array.filter (_ == "presence [\"ann\"]") seen) == 2
+      && Array.length (Array.filter (_ == """presence ["ann"]""") seen) == 2
 
   check "unique ids do not collide with names" $ succeeds do
     id <- liftAff $ Durable.newUniqueId rooms
@@ -173,7 +173,7 @@ main = launchAff_ do
     Simulator.advance timeline (Milliseconds 0.0)
     seen <- liftEffect $ Ref.read logs
     snapshot <- Rpc.run $ (Durable.get bots id).snapshot unit
-    pure $ seen == [ "opened", "presence [\"ann\"]", "message hey @ai, who is here?", "typing ai", "message hello ann, just us two" ]
+    pure $ seen == [ "opened", """presence ["ann"]""", "message hey @ai, who is here?", "typing ai", "message hello ann, just us two" ]
       && ((map (map (ChatRoom.printAuthor <<< _.author) <<< _.messages) snapshot) == Right [ "ann", "ai" ])
 
   check "assistant triggers use parsed exact mentions" do
@@ -186,7 +186,11 @@ main = launchAff_ do
     let chat = Durable.get quietRooms id
     _ <- Rpc.run $ chat.post
       { author: "ann"
-      , text: "hello @aiden and `@ai`\n```\n@ai\n```"
+      , text:
+          """hello @aiden and `@ai`
+```
+@ai
+```"""
       , images: []
       , replyTo: Nothing
       }
@@ -322,7 +326,7 @@ main = launchAff_ do
       && map _.reactions c == Right [ { emoji: "👍", by: [ "bob" ] } ]
       && map _.reactions d == Right []
       && none == Left (DomainError (NoSuchMessage (messageId 7)))
-      && Array.drop 3 seen == [ "updated [\"👍×1\"]", "updated [\"👍×2\"]", "updated [\"👍×1\"]", "updated []" ]
+      && Array.drop 3 seen == [ """updated ["👍×1"]""", """updated ["👍×2"]""", """updated ["👍×1"]""", "updated []" ]
 
   check "reactions normalize input and require a reactor" do
     let chat = Durable.getByName rooms "reaction-validation"
@@ -345,7 +349,7 @@ main = launchAff_ do
     served <- Durable.http rooms id $ Worker.requestTo "http://room/image/1"
     missing <- Durable.http rooms id $ Worker.requestTo "http://room/image/9"
     posted <- Rpc.run $ (Durable.get rooms id).post { author: "ann", text: "", images: [ imageId 1 ], replyTo: Nothing }
-    pure $ Worker.status uploaded == 200 && body == "{\"id\":1}"
+    pure $ Worker.status uploaded == 200 && body == """{"id":1}"""
       && Worker.status text == 415
       && Worker.status svg == 415
       && Worker.status mismatch == 415
@@ -401,7 +405,7 @@ main = launchAff_ do
       && (map (map _.id <<< Array.last <<< _.messages) inspection == Right (Just (messageId 501)))
       && (map _.currentPresent inspection == Right false)
       && Worker.status removedImage == 404
-      && replacementBody == "{\"id\":2}"
+      && replacementBody == """{"id":2}"""
 
   check "threaded marks only close messages from the same author" do
     let
@@ -422,13 +426,14 @@ main = launchAff_ do
       ]
 
   check "suggestions match names without case and exclude the author" do
-    let room = { draft: "hello\t@b", members: [ "ann", "Bob", "bob", "bert" ], messages: Map.empty }
+    let room = { draft: "hello" <> CodeUnits.singleton '\t' <> "@b", members: [ "ann", "Bob", "bob", "bert" ], messages: Map.empty }
     pure $ Composer.suggestions "ann" room == [ "Bob", "bert" ]
 
   check "mention completion keeps whitespace before the active mention" do
+    let newline = CodeUnits.singleton '\n'
     pure $ Composer.replaceLastWord "@Bob " "hello @b" == "hello @Bob "
       && Composer.replaceLastWord "@Bob " "@b" == "@Bob "
-      && Composer.replaceLastWord "@Bob " "hello\n@b" == "hello\n@Bob "
+      && Composer.replaceLastWord "@Bob " ("hello" <> newline <> "@b") == "hello" <> newline <> "@Bob "
 
   log "All chat tests passed."
 

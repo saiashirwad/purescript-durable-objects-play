@@ -1,5 +1,5 @@
 // Not under `bun run check`: this imports compiled PureScript from output/, and tsc
-// cannot load that without also checking spago's copies of the FFI files there.
+// cannot load that without also checking dependency copies of the FFI files there.
 // The wrangler entry point: PureScript objects and the API, exported as classes and a handler.
 import { DurableObject } from "cloudflare:workers";
 import { bridge } from "../../../output/Cloudflare.Durable.Bridge/index.js";

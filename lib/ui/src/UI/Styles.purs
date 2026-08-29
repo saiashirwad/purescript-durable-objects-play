@@ -6,6 +6,7 @@ import Prelude
 
 import Data.Foldable (fold)
 import Data.String (joinWith)
+import Data.String.CodeUnits (singleton)
 import UI.Avatar as Avatar
 import UI.Button as Button
 import UI.Checkbox as Checkbox
@@ -33,7 +34,7 @@ import UI.Tooltip as Tooltip
 -- | The one stylesheet: a reset, the themes, every module's atoms, then the
 -- | few rules atoms cannot express.
 css :: String
-css = joinWith "\n"
+css = joinWith (singleton '\n')
   [ reset
   , Theme.render
   , Style.renderSheet components

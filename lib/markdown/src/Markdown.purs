@@ -116,7 +116,10 @@ plain = joinWith " " <<< map blockText <<< parse
 -- Blocks ---------------------------------------------------------------------
 
 parse :: String -> Array Block
-parse = blocks <<< split (Pattern "\n") <<< S.replaceAll (Pattern "\r\n") (S.Replacement "\n")
+parse = blocks <<< split (Pattern newline) <<< S.replaceAll (Pattern windowsNewline) (S.Replacement newline)
+  where
+  newline = CU.singleton '\n'
+  windowsNewline = CU.singleton '\r' <> newline
 
 blocks :: Array String -> Array Block
 blocks input = Array.reverse $ tailRec step { rest: input, acc: [] }
@@ -130,7 +133,7 @@ blocks input = Array.reverse $ tailRec step { rest: input, acc: [] }
             { init: body, rest } = span (\line -> stripPrefix (Pattern "```") line == Nothing) tail
             lang = if trim fence == "" then Nothing else Just (trim fence)
           in
-            Loop { rest: drop 1 rest, acc: cons (Code lang (joinWith "\n" body)) state.acc }
+            Loop { rest: drop 1 rest, acc: cons (Code lang (joinWith newline body)) state.acc }
       | Just level <- heading head -> Loop { rest: tail, acc: cons (Heading level.depth (inlines level.text)) state.acc }
       | isQuote head ->
           let
@@ -146,12 +149,13 @@ blocks input = Array.reverse $ tailRec step { rest: input, acc: [] }
           let
             { init: para, rest } = span isPlain state.rest
           in
-            Loop { rest, acc: cons (Paragraph (inlines (joinWith "\n" para))) state.acc }
+            Loop { rest, acc: cons (Paragraph (inlines (joinWith newline para))) state.acc }
   isQuote = (_ /= Nothing) <<< stripPrefix (Pattern ">")
   unquote line = fromMaybe line $ stripPrefix (Pattern "> ") line <|> stripPrefix (Pattern ">") line
   isBullet line = stripPrefix (Pattern "- ") line /= Nothing || stripPrefix (Pattern "* ") line /= Nothing
   unbullet = S.drop 2
   isPlain line = trim line /= "" && not (isQuote line) && not (isBullet line) && heading line == Nothing && stripPrefix (Pattern "```") line == Nothing
+  newline = CU.singleton '\n'
 
 heading :: String -> Maybe { depth :: Int, text :: String }
 heading line =

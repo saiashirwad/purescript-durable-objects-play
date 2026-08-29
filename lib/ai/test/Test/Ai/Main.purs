@@ -42,7 +42,7 @@ main = launchAff_ do
 
   check "structured agents decode the schema; agents compose as a Category" do
     model <- Model.scripted
-      [ { message: Assistant { text: Just "{\"n\": 3}", toolCalls: [] }, finish: Stop, usage: Nothing }
+      [ { message: Assistant { text: Just """{"n": 3}""", toolCalls: [] }, finish: Stop, usage: Nothing }
       , { message: Assistant { text: Just "three", toolCalls: [] }, finish: Stop, usage: Nothing }
       ]
     let
@@ -58,7 +58,7 @@ main = launchAff_ do
       t = tool "x" "x" (Schema.object {}) Schema.string \_ -> pure ""
       bad = mount model [ t, t ] $ text ""
     answer <- invoke bad ""
-    pure $ answer == Left (Misconfigured "duplicate tool names: [\"x\",\"x\"]")
+    pure $ answer == Left (Misconfigured """duplicate tool names: ["x","x"]""")
 
   check "a provider is data: url, auth and wire compose into one request" do
     seen <- liftEffect $ Ref.new Nothing
@@ -87,7 +87,7 @@ main = launchAff_ do
         [ System "be brief"
         , User "hi"
         , Assistant { text: Nothing, toolCalls: [ { id: "c1", name: "members", arguments: J.jsonEmptyObject } ] }
-        , ToolResult { callId: "c1", content: "[\"ann\"]" }
+        , ToolResult { callId: "c1", content: """["ann"]""" }
         , Assistant { text: Just "just ann", toolCalls: [] }
         ]
     pure $ traverse (CA.decode OpenAi.message <<< CA.encode OpenAi.message) transcript == Right transcript

@@ -33,7 +33,7 @@ import Data.Int.Bits (and, shl, xor, zshr)
 import Data.Number as Number
 import Data.String (joinWith)
 import Foreign.Object as Object
-import Data.String.CodeUnits (toCharArray)
+import Data.String.CodeUnits (singleton, toCharArray)
 import Data.Tuple (Tuple(..))
 import Halogen.HTML as HH
 import Halogen.HTML.Properties as HP
@@ -104,7 +104,7 @@ global :: String -> Sheet
 global value = Sheet { atoms: [], rules: [ value ] }
 
 renderSheet :: Sheet -> String
-renderSheet (Sheet sheet) = joinWith "\n" $ [ render sheet.atoms ] <> sheet.rules
+renderSheet (Sheet sheet) = joinWith (singleton '\n') $ [ render sheet.atoms ] <> sheet.rules
 
 -- | All fields in a homogeneous style record, for feature-local sheets.
 sheetFromRecord :: forall row. Homogeneous row Style => { | row } -> Array Style
@@ -190,7 +190,7 @@ inlineVars values = HP.style $ joinWith ";" $ values <#> \(Tuple (Var name) valu
 
 -- | The stylesheet: one class per distinct declaration that can still win.
 render :: Array Style -> String
-render styles = joinWith "\n" $ renderDeclaration <$> Array.nubByEq sameAtom declarations
+render styles = joinWith (singleton '\n') $ renderDeclaration <$> Array.nubByEq sameAtom declarations
   where
   declarations = styles >>= \(Style entries) -> resolve entries
   sameAtom left right = className left == className right

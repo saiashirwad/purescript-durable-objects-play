@@ -10,6 +10,7 @@ on:
       - "lib/**"
       - "package.json"
       - "bun.lock"
+      - "bin/**"
       - "spago.yaml"
       - "spago.lock"
       - "tsconfig*.json"
@@ -21,6 +22,7 @@ on:
       - "lib/**"
       - "package.json"
       - "bun.lock"
+      - "bin/**"
       - "spago.yaml"
       - "spago.lock"
       - "tsconfig*.json"
@@ -31,7 +33,7 @@ permissions:
 jobs:
   chat:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -41,6 +43,13 @@ jobs:
         with:
           purescript: 0.15.16
           spago: 1.0.4
+      - id: cache-alexandrite
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/purescript-alexandrite
+          key: ${{ runner.os }}-alexandrite-741827da180fe9bad542096bb6592d5db4e65d04
+      - if: steps.cache-alexandrite.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/purefunctor/purescript-alexandrite.git --rev 741827da180fe9bad542096bb6592d5db4e65d04 --locked purescript-alexandrite --bin purescript-alexandrite
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run ci:chat

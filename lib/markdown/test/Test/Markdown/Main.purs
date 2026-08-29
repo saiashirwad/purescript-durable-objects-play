@@ -17,7 +17,16 @@ import Data.Maybe (Maybe(..))
 main :: Effect Unit
 main = launchAff_ do
   check "markdown parses blocks and inlines, and finds mentions" $ pure $
-    Markdown.parse "# Hi @bob\nsee **this** and `x` at https://a.io/p.\n\n> quoted\n- one\n- two\n```purs\nmain = 1\n```"
+    Markdown.parse
+      """# Hi @bob
+see **this** and `x` at https://a.io/p.
+
+> quoted
+- one
+- two
+```purs
+main = 1
+```"""
       ==
         [ Heading 1 [ Text "Hi ", Mention "bob" ]
         , Paragraph [ Text "see ", Bold [ Text "this" ], Text " and ", InlineCode "x", Text " at ", Link { text: "https://a.io/p", url: "https://a.io/p" }, Text "." ]
@@ -30,7 +39,7 @@ main = launchAff_ do
   check "maximum chat-sized inputs do not exhaust the stack" do
     let long = CodeUnits.fromCharArray $ Array.replicate 4000 'x'
     let unclosed = "*" <> long
-    let manyLines = joinWith "\n" $ Array.replicate 2000 "x"
+    let manyLines = joinWith (CodeUnits.singleton '\n') $ Array.replicate 2000 "x"
     pure $ Markdown.plain long == long
       && Markdown.plain unclosed == unclosed
       && Markdown.plain manyLines == manyLines

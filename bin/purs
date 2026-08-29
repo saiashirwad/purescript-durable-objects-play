@@ -1,0 +1,15 @@
+#!/bin/sh
+
+case "${1-}" in
+  --version)
+    # Report the language version that package set 80.8.0 uses.
+    printf '%s\n' '0.15.15'
+    ;;
+  compile)
+    exec purescript-alexandrite "$@"
+    ;;
+  *)
+    # Spago uses purs graph to find run and test entry points.
+    PATH=${PATH#*:} exec purs "$@"
+    ;;
+esac

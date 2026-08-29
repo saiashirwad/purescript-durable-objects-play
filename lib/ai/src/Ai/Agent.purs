@@ -40,6 +40,7 @@ import Data.Profunctor (class Profunctor)
 import Data.Profunctor.Choice (class Choice)
 import Data.Profunctor.Star (Star(..))
 import Data.Profunctor.Strong (class Strong)
+import Data.String.CodeUnits as CodeUnits
 import Data.Traversable (for)
 
 newtype Def i o = Def
@@ -61,7 +62,7 @@ text instructions = Def { system: system instructions, render: user, parse: Righ
 -- | shown to the model and used to decode its JSON.
 structured :: forall o. String -> Schema o -> Def String o
 structured instructions schema = Def
-  { system: system $ instructions <> "\n\nAnswer with json only, matching this JSON Schema:\n" <> J.stringify (Schema.json schema)
+  { system: system $ instructions <> newline <> newline <> "Answer with json only, matching this JSON Schema:" <> newline <> J.stringify (Schema.json schema)
   , render: user
   , parse
   , jsonOnly: true
@@ -69,6 +70,7 @@ structured instructions schema = Def
   }
   where
   parse raw = jsonParser raw >>= lmap CA.printJsonDecodeError <<< CA.decode (Schema.codec schema)
+  newline = CodeUnits.singleton '\n'
 
 -- | A round is one model reply and the tool calls it asked for. Eight by default.
 rounds :: forall i o. Int -> Def i o -> Def i o
