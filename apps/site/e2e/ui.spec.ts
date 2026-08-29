@@ -1,12 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
-
-const wcag = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
-
-async function expectNoAxeViolations(page: Page) {
-  const result = await new AxeBuilder({ page }).withTags(wcag).analyze();
-  expect(result.violations).toEqual([]);
-}
+import { expect, test } from "@playwright/test";
+import { expectNoAxeViolations } from "./accessibility";
 
 test("the lab has names, roles, and no automatic WCAG violations", async ({ page }) => {
   await page.goto("/ui.html");

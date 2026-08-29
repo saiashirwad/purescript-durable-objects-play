@@ -10,6 +10,8 @@
   },
   "include": [
     "types/global.d.ts",
-    "lib/durable/src/**/Simulator.js"
+    "lib/durable/src/**/Simulator.js",
+    "apps/site/e2e/**/*.ts",
+    "apps/site/playwright.config.ts"
   ]
 }

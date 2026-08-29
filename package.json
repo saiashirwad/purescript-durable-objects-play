@@ -10,7 +10,10 @@
     "dev": "bun run build && bun run bundle && bun run config && wrangler dev --config apps/site/wrangler.jsonc",
     "deploy": "bun run check && bun run build && bun run bundle && bun run config && wrangler deploy --config apps/site/wrangler.jsonc",
     "test": "spago test",
-    "test:e2e": "playwright test -c apps/site/playwright.config.ts"
+    "test:chat": "spago test -p chat",
+    "test:e2e": "playwright test -c apps/site/playwright.config.ts",
+    "test:e2e:chat": "playwright test -c apps/site/playwright.config.ts chat.spec.ts",
+    "ci:chat": "bun run check && bun run test:chat && bun run test:e2e:chat"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

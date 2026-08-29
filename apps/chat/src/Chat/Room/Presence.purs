@@ -13,7 +13,7 @@ import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Runtime (class MonadRuntime)
 import Cloudflare.Durable.Sockets (Sockets)
 import Cloudflare.Durable.Sockets as Sockets
-import Data.Array (nub)
+import Data.Array (filter, nub)
 import Data.Variant (Variant)
 
 newtype Presence = Presence
@@ -30,7 +30,13 @@ members (Presence presence) = nub <<< map _.tag <$> Sockets.connected presence.a
 hooks :: Presence -> Hooks
 hooks presence =
   Durable.connectHook (const $ broadcast presence)
-    <> Durable.disconnectHook (const $ broadcast presence)
+    <> Durable.disconnectHook (\socket -> broadcastLeaving presence socket.id)
 
 broadcast :: Presence -> Runtime Unit
 broadcast presence@(Presence channels) = members presence >>= Sockets.broadcast channels.emit
+
+broadcastLeaving :: Presence -> String -> Runtime Unit
+broadcastLeaving (Presence channels) leaving = do
+  connected <- Sockets.connected channels.all
+  let remaining = filter (\socket -> socket.id /= leaving) connected
+  Sockets.broadcast channels.emit $ nub $ map _.tag remaining

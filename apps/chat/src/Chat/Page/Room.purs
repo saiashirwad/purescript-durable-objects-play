@@ -90,7 +90,7 @@ roomTitle actions { notifications } room =
 roomPeople :: forall action w. ViewActions action -> HeaderState -> RoomView -> HH.HTML w action
 roomPeople actions { author } room =
   HH.div [ css styles.headerGroup ]
-    [ HH.div [ css styles.members, ARIA.label $ "People online: " <> joinWith ", " room.members ] $
+    [ HH.div [ css styles.members, ARIA.role "group", ARIA.label $ "People online: " <> joinWith ", " room.members ] $
         room.members # mapWithIndex \index -> avatar $ styles.member <> guard (index > 0) styles.overlap
     , Button.button (quiet { styles = styles.identity }) [ HP.title "Change name", HE.onClick \_ -> actions.changeName ]
         [ avatar mempty author, HH.span_ [ HH.text author ] ]

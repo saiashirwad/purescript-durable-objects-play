@@ -1,0 +1,46 @@
+name: Chat checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chat.yml"
+      - "apps/chat/**"
+      - "apps/site/**"
+      - "lib/**"
+      - "package.json"
+      - "bun.lock"
+      - "spago.yaml"
+      - "spago.lock"
+      - "tsconfig*.json"
+  pull_request:
+    paths:
+      - ".github/workflows/chat.yml"
+      - "apps/chat/**"
+      - "apps/site/**"
+      - "lib/**"
+      - "package.json"
+      - "bun.lock"
+      - "spago.yaml"
+      - "spago.lock"
+      - "tsconfig*.json"
+
+permissions:
+  contents: read
+
+jobs:
+  chat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: purescript-contrib/setup-purescript@27b4d58195c470f821f4b7071c5af4e2e483b2c5
+        with:
+          purescript: 0.15.16
+          spago: 1.0.4
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chrome
+      - run: bun run ci:chat

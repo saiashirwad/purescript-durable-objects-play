@@ -305,7 +305,6 @@ styles =
       [ "align-self" := "flex-end"
       , "font-size" := "0.65rem"
       , "font-variant-numeric" := "tabular-nums"
-      , "opacity" := "0.5"
       ]
   , imageLink: create
       [ "display" := "block"
