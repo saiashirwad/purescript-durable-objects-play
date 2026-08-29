@@ -26,14 +26,14 @@ import Ai.Schema (Schema)
 import Ai.Schema as Schema
 import Ai.Tool (Toolkit)
 import Ai.Tool as Tool
-import Control.Monad.Except (ExceptT(..), except, runExceptT, throwError)
+import Control.Monad.Except (ExceptT(..), except, runExceptT, throwError, withExceptT)
 import Control.Monad.Rec.Class (class MonadRec, Step(..), tailRecM)
 import Data.Argonaut.Core as J
 import Data.Argonaut.Parser (jsonParser)
 import Data.Array (length, nub)
 import Data.Bifunctor (lmap)
 import Data.Codec.Argonaut as CA
-import Data.Either (Either(..), either)
+import Data.Either (Either(..))
 import Data.Foldable (fold)
 import Data.Maybe (fromMaybe)
 import Data.Profunctor (class Profunctor)
@@ -63,10 +63,12 @@ structured :: forall o. String -> Schema o -> Def String o
 structured instructions schema = Def
   { system: system $ instructions <> "\n\nAnswer with json only, matching this JSON Schema:\n" <> J.stringify (Schema.json schema)
   , render: user
-  , parse: \raw -> jsonParser raw >>= CA.decode (Schema.codec schema) >>> lmap CA.printJsonDecodeError
+  , parse
   , jsonOnly: true
   , rounds: 8
   }
+  where
+  parse raw = jsonParser raw >>= lmap CA.printJsonDecodeError <<< CA.decode (Schema.codec schema)
 
 -- | A round is one model reply and the tool calls it asked for. Eight by default.
 rounds :: forall i o. Int -> Def i o -> Def i o
@@ -99,10 +101,9 @@ mount model tools (Def d) = Agent $ Star \input -> do
     let transcript' = transcript <> Prompt [ reply.message ]
     case reply.finish, reply.message of
       ToolCalls, Assistant { toolCalls } -> do
-        results <- for toolCalls \call ->
-          ExceptT (Right <$> Tool.call tools call) >>= either
-            (\why -> throwError $ ToolFailed { name: call.name, why })
-            (pure <<< toolResult call.id <<< J.stringify)
+        results <- for toolCalls \call -> do
+          answer <- withExceptT (\why -> ToolFailed { name: call.name, why }) $ ExceptT $ Tool.call tools call
+          pure $ toolResult call.id $ J.stringify answer
         pure $ Loop { transcript: transcript' <> fold results, left: left - 1 }
       Stop, Assistant { text: answer } -> Done <$> except (lmap BadReply $ d.parse $ fromMaybe "" answer)
       Length, _ -> throwError $ BadReply "reply cut off at the length limit"

@@ -9,6 +9,7 @@ import Prelude
 
 import Ai.Http as Http
 import Control.Monad.Except (ExceptT(..), except, runExceptT, throwError, withExceptT)
+import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
 import Data.Bifunctor (lmap)
 import Data.Codec.Argonaut (JsonCodec)
@@ -17,9 +18,7 @@ import Data.Codec.Argonaut.Compat as Compat
 import Data.Codec.Argonaut.Record as CAR
 import Data.Either (Either)
 import Data.Maybe (Maybe, fromMaybe)
-import Data.Tuple.Nested ((/\))
 import Effect.Aff (Aff, attempt, message)
-import Foreign.Object as Object
 
 type Result = { title :: String, url :: String, excerpt :: String }
 
@@ -30,17 +29,21 @@ search apiKey query = runExceptT do
   reply <- withExceptT message $ ExceptT $ attempt $ Http.post
     { url: "https://api.exa.ai/search"
     , headers: [ { name: "x-api-key", value: apiKey } ]
-    , body: J.fromObject $ Object.fromFoldable
-        [ "query" /\ J.fromString query
-        , "numResults" /\ J.fromNumber 5.0
-        , "type" /\ J.fromString "auto"
-        , "contents" /\ J.fromObject (Object.singleton "text" $ J.fromObject $ Object.singleton "maxCharacters" $ J.fromNumber 600.0)
-        ]
+    , body: CA.encode request { query, numResults: 5, "type": "auto", contents: { text: { maxCharacters: 600 } } }
     }
   when (reply.status /= 200) $ throwError $ "Exa answered " <> show reply.status <> ": " <> J.stringify reply.body
   found <- except $ lmap CA.printJsonDecodeError $ CA.decode page reply.body
   pure $ found.results <#> \r ->
     { title: fromMaybe r.url (join r.title), url: r.url, excerpt: fromMaybe "" (join r.text) }
+
+-- | The body Exa wants: a query, five results, up to 600 characters of page text.
+request :: JsonCodec { query :: String, numResults :: Int, "type" :: String, contents :: { text :: { maxCharacters :: Int } } }
+request = CAR.object "Search"
+  { query: CA.string
+  , numResults: CA.int
+  , "type": CA.string
+  , contents: CAR.object "Contents" { text: CAR.object "Text" { maxCharacters: CA.int } }
+  }
 
 -- | `title` and `text` may be missing or null.
 page :: JsonCodec { results :: Array { title :: Maybe (Maybe String), url :: String, text :: Maybe (Maybe String) } }

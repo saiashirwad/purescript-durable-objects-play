@@ -13,7 +13,7 @@ import Data.Argonaut.Core as J
 import Data.Argonaut.Parser (jsonParser)
 import Data.Either (fromRight)
 import Data.HTTP.Method (Method(..))
-import Data.Tuple (Tuple(..))
+import Data.Tuple.Nested ((/\))
 import Effect.Aff (Aff)
 import Effect.Class (liftEffect)
 import JS.Fetch as Fetch
@@ -32,7 +32,7 @@ post :: Post
 post { url, headers, body } = do
   request <- liftEffect $ Request.new url
     { method: POST
-    , headers: Headers.fromFoldable $ [ Tuple "content-type" "application/json" ] <> (headers <#> \{ name, value } -> Tuple name value)
+    , headers: Headers.fromFoldable $ [ "content-type" /\ "application/json" ] <> (headers <#> \{ name, value } -> name /\ value)
     , body: Body.fromString $ J.stringify body
     }
   response <- toAffE $ Fetch.fetch request

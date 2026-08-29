@@ -96,7 +96,7 @@ object :: forall spec list r. RowToList spec list => Fields list spec r => Recor
 object spec = Schema
   { json: J.fromObject $ Object.fromFoldable
       [ "type" /\ J.fromString "object"
-      , "properties" /\ J.fromObject (Object.fromFoldable (fst' <$> props))
+      , "properties" /\ J.fromObject (Object.fromFoldable (props <#> \p -> p.name /\ p.schema))
       , "required" /\ J.fromArray (J.fromString <<< _.name <$> props)
       , "additionalProperties" /\ J.fromBoolean false
       ]
@@ -104,7 +104,6 @@ object spec = Schema
   }
   where
   props = properties (Proxy :: Proxy list) spec
-  fst' p = p.name /\ p.schema
 
 class Fields (list :: RowList Type) (spec :: Row Type) (r :: Row Type) | list -> r where
   fields :: Proxy list -> Record spec -> CA.JPropCodec (Record r)
