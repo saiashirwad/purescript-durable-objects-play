@@ -1,4 +1,6 @@
-// Run after `spago build`.
+// Not under `bun run check`: this imports compiled PureScript from output/, and tsc
+// cannot load that without also checking spago's copies of the FFI files there.
+// Write wrangler.jsonc from `Site.Deploy`. Run after `spago build`; set CONTAINERS=1 to include containers.
 import { writeFileSync } from "node:fs";
 import { config, configWithContainers } from "../../../output/Site.Deploy/index.js";
 

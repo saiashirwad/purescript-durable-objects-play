@@ -26,6 +26,7 @@ import UI.Style (Style, (:=), create, css, on, var)
 import UI.Style as Style
 import UI.Theme (tokens)
 import Web.Event.Event (preventDefault)
+import Web.HTML.HTMLElement (focus)
 import Web.UIEvent.KeyboardEvent (KeyboardEvent, key, toEvent)
 
 data Orientation = Horizontal | Vertical
@@ -136,7 +137,7 @@ handleAction = case _ of
     for_ next \index -> do
       liftEffect $ preventDefault $ toEvent event
       select index
-      Dom.onRef (tabRef index) Dom.focusElement
+      Dom.onRef (tabRef index) focus
   Raise output -> H.raise output
   where
   select index = do

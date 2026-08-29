@@ -36,8 +36,8 @@ import Prelude
 import Cloudflare.Durable.Alarm as Alarm
 import Cloudflare.Durable.Init (Image, InstanceType(..))
 import Cloudflare.Durable.Init (Image, InstanceType(..)) as Exports
-import Cloudflare.Durable.Runtime (class MonadRuntime, Exit, Launch(..), RawContainer, State, liftRuntime, platform, platformError)
 import Cloudflare.Durable.Runtime (Exit(..), Launch) as Exports
+import Cloudflare.Durable.Runtime (class MonadRuntime, Exit, Launch(..), RawContainer, State, liftRuntime, platform, platformError)
 import Cloudflare.Durable.Storage as Storage
 import Cloudflare.Worker (Request, Response)
 import Control.Monad.Rec.Class (Step(..), tailRecM)
@@ -51,7 +51,7 @@ import Data.Newtype (over, unwrap)
 import Data.Semigroup.Last as Semigroup
 import Data.Time.Duration (class Duration, Milliseconds(..), fromDuration)
 import Data.Tuple (Tuple)
-import Effect.Aff (delay)
+import Effect.Aff (Aff, delay)
 
 newtype Container = Container RawContainer
 
@@ -104,7 +104,7 @@ ensure box@(Container c) port launch = do
     ready <- liftRuntime $ platform "container.ensure" $ tailRecM poll 120
     unless ready $ liftRuntime $ platformError "container.ensure" $ "port " <> show port <> " never answered"
   where
-  poll :: Int -> _ (Step Int Boolean)
+  poll :: Int -> Aff (Step Int Boolean)
   poll 0 = pure $ Done false
   poll tries = do
     listening <- c.probe port

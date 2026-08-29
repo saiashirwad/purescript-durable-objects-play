@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "es2022"
+    ],
+    "types": [
+      "@cloudflare/workers-types"
+    ]
+  },
+  "include": [
+    "types/global.d.ts",
+    "lib/worker/src/**/*.js",
+    "lib/durable/src/**/Bridge.js",
+    "lib/durable/src/**/Platform.js"
+  ]
+}

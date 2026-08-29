@@ -57,10 +57,12 @@ import Data.Argonaut.Core (Json)
 import Data.Codec.Argonaut (JsonDecodeError)
 import Data.Codec.Argonaut as CA
 import Data.Either (Either(..))
+import Data.Generic.Rep (class Generic)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Newtype (unwrap)
+import Data.Show.Generic (genericShow)
 import Data.Symbol (class IsSymbol, reflectSymbol)
 import Data.Variant (Variant, case_)
 import Effect (Effect)
@@ -115,12 +117,10 @@ emitting
   => Object name api ()
   -> Record spec
   -> Object name api events
-emitting (Object o) spec = Object o
-  { encodeEvent = CA.encode (variantCodec list spec)
-  , decodeEvent = CA.decode (variantCodec list spec)
-  }
+emitting (Object o) spec = Object o { encodeEvent = CA.encode codec, decodeEvent = CA.decode codec }
   where
   list = Proxy :: Proxy list
+  codec = variantCodec list spec
 
 className :: forall name api events. Object name api events -> String
 className (Object o) = o.name
@@ -129,12 +129,10 @@ className (Object o) = o.name
 -- | simulator is this, one per id; the tests check it behaves as the
 -- | implementation.
 loopback :: forall name api events. Object name api events -> Record api -> Record api
-loopback (Object o) impl = o.connect \name request ->
-  case Map.lookup name (o.serve impl) of
-    Just handle -> handle request
-    Nothing -> throwError $ error $ o.name <> " has no method " <> show name
-
--- Implementations ------------------------------------------------------------
+loopback (Object o) impl = o.connect \name -> fromMaybe (missing name) $ Map.lookup name served
+  where
+  served = o.serve impl
+  missing name _ = throwError $ error $ o.name <> " has no method" <> show name
 
 type HookFields =
   { alarm :: Runtime Unit
@@ -162,8 +160,8 @@ emptyHooks =
 instance semigroupHooks :: Semigroup Hooks where
   append (Hooks a) (Hooks b) = Hooks
     { alarm: a.alarm <> b.alarm
-    , connect: \socket -> a.connect socket <> b.connect socket
-    , disconnect: \socket -> a.disconnect socket <> b.disconnect socket
+    , connect: a.connect <> b.connect
+    , disconnect: a.disconnect <> b.disconnect
     , fetch: \request -> a.fetch request >>= maybe (b.fetch request) (pure <<< Just)
     }
 
@@ -264,9 +262,10 @@ data Id
 derive instance eqId :: Eq Id
 derive instance ordId :: Ord Id
 
+derive instance genericId :: Generic Id _
+
 instance showId :: Show Id where
-  show (Named name) = "(Named " <> show name <> ")"
-  show (Unique id) = "(Unique " <> show id <> ")"
+  show = genericShow
 
 -- | Unique ids print as hex; named ids print as their name.
 printId :: Id -> String

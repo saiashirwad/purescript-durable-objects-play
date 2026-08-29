@@ -1,36 +1,45 @@
-export const formatTime = (ms) =>
-  new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// @ts-check
+// Browser APIs no PureScript library covers yet. Everything else is in Browser.purs.
 
-export const nearBottom = (el) => () =>
-  el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+/**
+ * "granted", "denied", "default", or "unsupported".
+ *
+ * @type {Effect<string>}
+ */
+export const notificationPermission = () =>
+  typeof Notification === "undefined" ? "unsupported" : Notification.permission;
 
-export const scrollToEnd = (el) => () => {
-  el.scrollTop = el.scrollHeight;
-};
+/** @type {AsyncEffect<string>} */
+export const requestNotifications = () =>
+  typeof Notification === "undefined"
+    ? Promise.resolve("unsupported")
+    : Notification.requestPermission();
 
-export const copyText = (text) => () => {
-  navigator.clipboard?.writeText(text);
-};
-
-export const interval = (ms) => (push) => () => {
-  const id = setInterval(() => push()(), ms);
-  return () => clearInterval(id);
-};
-
-// True when the user is not looking at this tab.
-export const away = () => document.hidden || !document.hasFocus();
-
+/**
+ * Show a system notification if allowed; clicking it focuses this window.
+ * One `tag` per room, so a new message replaces the old notification.
+ *
+ * @param {{ title: string, body: string, tag: string }} spec
+ * @returns {Effect<void>}
+ */
 export const notify = ({ title, body, tag }) => () => {
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-  const n = new Notification(title, { body, tag, renotify: true });
+  // `renotify` is real in Chrome and Firefox but missing from lib.dom.
+  const options = /** @type {NotificationOptions} */ ({ body, tag, renotify: true });
+  const n = new Notification(title, options);
   n.onclick = () => { window.focus(); n.close(); };
 };
 
-export const setTitle = (title) => () => { document.title = title; };
+/** @type {Effect<boolean>} */
+export const hasFocus = () => document.hasFocus();
 
-export const scrollToId = (id) => () => {
-  const el = document.getElementById(id);
-  if (!el) return;
+/**
+ * Scroll an element into view and flash its outline.
+ *
+ * @param {Element} el
+ * @returns {Effect<void>}
+ */
+export const reveal = (el) => () => {
   el.scrollIntoView({ behavior: "smooth", block: "center" });
   if (typeof el.animate === "function") {
     const ring = getComputedStyle(el).getPropertyValue("--ui-color-focus-ring").trim();

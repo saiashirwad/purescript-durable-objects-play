@@ -2,16 +2,18 @@ package:
   name: ai
   dependencies:
     - aff
-    - aff-promise
     - argonaut-core
     - arrays
     - bifunctors
     - codec-argonaut
     - effect
     - either
-    - foreign-object
     - foldable-traversable
+    - foreign-object
+    - http-methods
     - invariant
+    - js-fetch
+    - js-promise-aff
     - maybe
     - newtype
     - prelude

@@ -4,6 +4,7 @@ package:
     - aff
     - aff-promise
     - ai
+    - argonaut-core
     - arrays
     - cloudflare-durable
     - cloudflare-worker
@@ -13,11 +14,14 @@ package:
     - datetime
     - effect
     - either
+    - fetch
     - foldable-traversable
     - foreign-object
     - halogen
     - halogen-subscriptions
     - integers
+    - js-intl
+    - js-timers
     - markdown
     - maybe
     - newtype
@@ -28,10 +32,12 @@ package:
     - profunctor-lenses
     - refs
     - strings
-    - tuples
     - transformers
+    - tuples
     - ui
     - variant
+    - web-clipboard
+    - web-dom
     - web-events
     - web-html
     - web-storage

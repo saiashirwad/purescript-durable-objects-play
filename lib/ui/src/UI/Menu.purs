@@ -24,6 +24,7 @@ import UI.Style (Style, (:=), create, css, on, var)
 import UI.Style as Style
 import UI.Theme (tokens)
 import Web.Event.Event (EventType(..), preventDefault)
+import Web.HTML.HTMLElement as HTMLElement
 import Web.UIEvent.KeyboardEvent (KeyboardEvent, key, toEvent)
 
 type Item output =
@@ -144,7 +145,7 @@ handleAction = case _ of
     let active = choose state.input.items state.active
     H.modify_ _ { active = active }
     focus active
-  focus index = Dom.onRef (itemRef index) Dom.focusElement
+  focus index = Dom.onRef (itemRef index) HTMLElement.focus
   close = Dom.onRef menuRef Dom.hidePopover
 
 root :: Style

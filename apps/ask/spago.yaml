@@ -8,6 +8,8 @@ package:
     - effect
     - either
     - formatters
+    - maybe
+    - node-process
     - now
     - prelude
   run:

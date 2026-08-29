@@ -14,10 +14,12 @@ package:
     - effect
     - either
     - exceptions
+    - fetch
     - foldable-traversable
     - foreign
     - foreign-object
     - functions
+    - js-timers
     - maybe
     - newtype
     - now
@@ -32,6 +34,9 @@ package:
     - transformers
     - tuples
     - variant
+    - web-events
+    - web-html
+    - web-socket
   test:
     main: Test.Main
     dependencies:

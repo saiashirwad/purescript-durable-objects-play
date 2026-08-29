@@ -9,16 +9,19 @@ import Prelude
 
 import Chat.Client (Chat, RoomId)
 import Chat.Client as Chat
-import Chat.Page.Browser (localStorage, location)
+import Chat.Page.Browser (localStorage, location, notificationPermission, requestNotifications)
 import Chat.Page.Types (App, Joining, Locked, SessionAction(..), View(..), _Joining, _Locked, _view, withRoom)
 import Chat.Style (styles)
-import Control.Promise (Promise, toAffE)
+import Control.Promise (toAffE)
+import Data.Argonaut.Core as J
 import Data.Lens (over, preview)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String (drop, null, trim)
-import Effect (Effect)
+import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Effect.Class (liftEffect)
+import Fetch (Method(..), fetch)
+import Foreign.Object as Object
 import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
@@ -31,10 +34,17 @@ import Web.Event.Event (preventDefault)
 import Web.HTML.Location as Location
 import Web.Storage.Storage as Storage
 
-foreign import sessionStatus :: Effect (Promise Int)
-foreign import login :: String -> Effect (Promise Int)
-foreign import notificationPermission :: Effect String
-foreign import requestNotifications :: Effect (Promise String)
+-- | 204 when this browser already holds a session cookie.
+sessionStatus :: Aff Int
+sessionStatus = _.status <$> fetch "/session" {}
+
+-- | 204 when the passkey is right.
+login :: String -> Aff Int
+login passkey = _.status <$> fetch "/login"
+  { method: POST
+  , headers: { "content-type": "application/json" }
+  , body: J.stringify $ J.fromObject $ Object.singleton "passkey" $ J.fromString passkey
+  }
 
 chat :: Chat
 chat = Chat.connect "/rpc"
@@ -83,7 +93,7 @@ handle = case _ of
     author <- liftEffect $ fromMaybe "" <$> (Storage.getItem authorKey =<< localStorage)
     notifications <- liftEffect notificationPermission
     H.modify_ _ { author = author, notifications = notifications }
-    admitted <- liftAff $ toAffE sessionStatus
+    admitted <- liftAff sessionStatus
     if admitted == 204 then roomFromUrl
     else H.modify_ _ { view = Locked { passkey: "", error: Nothing, busy: false } } $> Nothing
   SetPasskey passkey ->
@@ -94,7 +104,7 @@ handle = case _ of
       Nothing -> pure Nothing
       Just locked -> do
         H.modify_ $ over (_view <<< _Locked) _ { busy = true }
-        admitted <- liftAff $ toAffE $ login (trim locked.passkey)
+        admitted <- liftAff $ login (trim locked.passkey)
         if admitted == 204 then H.modify_ _ { view = Lobby { busy: false } } *> roomFromUrl
         else H.modify_ (over (_view <<< _Locked) _ { busy = false, error = Just "That passkey is not right." }) $> Nothing
     pure result

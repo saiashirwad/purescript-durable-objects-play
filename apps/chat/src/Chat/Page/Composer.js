@@ -1,4 +1,14 @@
-// Shrink to at most 1600px on the long side, as JPEG unless it has alpha.
+// @ts-check
+// Image attachments: pick or paste, shrink, upload. Canvas and the file
+// dialog have no PureScript binding, so this stays JS.
+
+/**
+ * Shrink to at most 1600px on the long side, as JPEG unless it has alpha.
+ * Falls back to the original file whenever the browser cannot decode or encode it.
+ *
+ * @param {File} file
+ * @returns {Promise<Blob>}
+ */
 const shrink = (file) =>
   new Promise((resolve) => {
     const img = new Image();
@@ -10,7 +20,9 @@ const shrink = (file) =>
       const canvas = document.createElement("canvas");
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
-      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      const context = canvas.getContext("2d");
+      if (!context) return resolve(file);
+      context.drawImage(img, 0, 0, canvas.width, canvas.height);
       const type = file.type === "image/png" ? "image/png" : "image/jpeg";
       canvas.toBlob((blob) => resolve(blob ?? file), type, 0.86);
     };
@@ -18,19 +30,33 @@ const shrink = (file) =>
     img.src = url;
   });
 
+/**
+ * Upload each image in turn; the ids the server assigns, in order.
+ *
+ * @param {string} endpoint
+ * @param {File[]} files
+ * @returns {Promise<number[]>}
+ */
 const upload = async (endpoint, files) => {
+  /** @type {number[]} */
   const ids = [];
   for (const file of files) {
     if (!file.type.startsWith("image/")) continue;
     const blob = await shrink(file);
     const response = await fetch(endpoint, { method: "POST", headers: { "content-type": blob.type }, body: blob });
     if (!response.ok) throw new Error(`upload failed: HTTP ${response.status}`);
-    ids.push((await response.json()).id);
+    const { id } = /** @type {{ id: number }} */ (await response.json());
+    ids.push(id);
   }
   return ids;
 };
 
-// Open the file dialog; resolve with the uploaded image ids.
+/**
+ * Open the file dialog; resolve with the uploaded image ids.
+ *
+ * @param {string} endpoint
+ * @returns {AsyncEffect<number[]>}
+ */
 export const pickAndUpload = (endpoint) => () =>
   new Promise((resolve, reject) => {
     const input = document.createElement("input");
@@ -42,7 +68,12 @@ export const pickAndUpload = (endpoint) => () =>
     input.click();
   });
 
-// Images on the clipboard of a paste event, uploaded. Empty when it was text.
+/**
+ * Images on the clipboard of a paste event, uploaded. Empty when it was text.
+ *
+ * @param {string} endpoint
+ * @returns {(event: ClipboardEvent) => AsyncEffect<number[]>}
+ */
 export const uploadPasted = (endpoint) => (event) => () => {
   const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
   if (files.length > 0) event.preventDefault();

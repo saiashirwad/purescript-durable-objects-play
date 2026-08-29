@@ -125,13 +125,14 @@ Simulator.advance clock (Milliseconds 1000.0)
 ```
 
 ```sh
-npm install
-npm run dev       # chat at localhost:8787, counter at /counter.html
-npm run build:ui  # build the UI library
-npm run test:ui   # test style rules and keyboard state
-npm run test:e2e  # test pages in Chrome with axe
+bun install
+bun run dev       # chat at localhost:8787, counter at /counter.html, UI lab at /ui.html
+bun run check     # type-check the JS FFI files with their JSDoc
+bun run test:e2e  # test pages in Chrome with axe
 spago test        # same objects, in-memory simulator
 ```
+
+Bun installs packages and runs the scripts; spago still runs tests and `spago run` under Node.
 
 Libraries are in `lib/`; applications are in `apps/`.
 

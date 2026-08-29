@@ -10,6 +10,7 @@ import Prelude
 
 import Data.Bifunctor (bimap)
 import Data.Foldable (foldMap)
+import Data.Traversable (traverse)
 import Data.Maybe (Maybe(..))
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (liftEffect)
@@ -24,6 +25,7 @@ import UI.Internal.Dom as Dom
 import UI.Style (Style, (:=), create, css, var)
 import UI.Theme (tokens)
 import Web.Event.Event (EventType(..))
+import Web.HTML.HTMLElement (HTMLElement)
 import Web.UIEvent.MouseEvent (MouseEvent, toEvent)
 
 data Kind = Modal | Alert
@@ -45,6 +47,7 @@ type Input output =
 type State output =
   { input :: Input output
   , open :: Boolean
+  , restore :: Maybe HTMLElement -- what had focus before the dialog opened
   }
 
 data Action output
@@ -62,7 +65,7 @@ dialogRef = H.RefLabel "dialog"
 -- | A native `<dialog>`: the browser contains focus and handles Escape.
 component :: forall output query m. MonadAff m => H.Component query (Input output) output m
 component = H.mkComponent
-  { initialState: \input -> { input, open: input.initialOpen }
+  { initialState: \input -> { input, open: input.initialOpen, restore: Nothing }
   , render
   , eval: H.mkEval H.defaultEval
       { handleAction = handleAction
@@ -111,17 +114,22 @@ handleAction = case _ of
   Open -> openDialog
   Close -> close
   NativeClosed -> H.gets _.open >>= \open -> when open do
-    Dom.onRef dialogRef Dom.closeDialog
+    restore <- takeRestore
+    Dom.onRef dialogRef (Dom.closeDialog restore)
     announce false
   Backdrop event -> when (Dom.isBackdropClick $ toEvent event) close
   Raise output -> H.raise output
   where
   openDialog = do
-    Dom.onRef dialogRef Dom.showModal
+    restore <- H.getHTMLElementRef dialogRef >>= traverse (liftEffect <<< Dom.showModal)
+    H.modify_ _ { restore = join restore }
     announce true
   close = H.getHTMLElementRef dialogRef >>= case _ of
-    Just element -> liftEffect $ Dom.closeDialog element
+    Just element -> do
+      restore <- takeRestore
+      liftEffect $ Dom.closeDialog restore element
     Nothing -> announce false
+  takeRestore = H.gets _.restore <* H.modify_ _ { restore = Nothing }
   announce open = do
     H.modify_ _ { open = open }
     onOpenChange <- H.gets _.input.onOpenChange

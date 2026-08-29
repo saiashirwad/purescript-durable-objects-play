@@ -1,3 +1,6 @@
+// Not under `bun run check`: this imports compiled PureScript from output/, and tsc
+// cannot load that without also checking spago's copies of the FFI files there.
+// Write the stylesheets PureScript computes. Run after `spago build`.
 import { mkdir, writeFile } from "node:fs/promises";
 import { css as chatCss } from "../../../output/Chat.Style/index.js";
 import { css } from "../../../output/UI.Styles/index.js";

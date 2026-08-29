@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "es2022",
+      "dom",
+      "dom.iterable"
+    ],
+    "types": []
+  },
+  "include": [
+    "types/global.d.ts",
+    "apps/chat/src/**/*.js",
+    "lib/ui/src/**/*.js"
+  ]
+}

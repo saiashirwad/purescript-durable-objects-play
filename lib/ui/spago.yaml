@@ -14,6 +14,8 @@ package:
     - prelude
     - strings
     - tuples
+    - unsafe-reference
+    - web-dom
     - web-events
     - web-html
     - web-uievents

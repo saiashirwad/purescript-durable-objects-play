@@ -20,8 +20,13 @@ module UI.Style
 import Prelude
 
 import Data.Array as Array
+import Data.Char (toCharCode)
 import Data.Foldable (fold)
+import Data.Int (base36, floor, toNumber, toStringAs)
+import Data.Int.Bits (and, shl, xor, zshr)
+import Data.Number as Number
 import Data.String (joinWith)
+import Data.String.CodeUnits (toCharArray)
 import Data.Tuple (Tuple(..))
 import Halogen.HTML as HH
 import Halogen.HTML.Properties as HP
@@ -70,7 +75,33 @@ derive newtype instance Monoid Style
 
 newtype Var = Var String
 
-foreign import atomName :: String -> String
+-- | A short class name: FNV-1a of the key, in base 36.
+atomName :: String -> String
+atomName key = "u" <> digits (unsigned $ Array.foldl step offset $ toCharArray key)
+  where
+  offset = -2128831035 -- 2166136261, as a signed 32-bit int
+  step hash char = imul (hash `xor` toCharCode char) 16777619
+  unsigned hash = if hash < 0 then toNumber hash + 4294967296.0 else toNumber hash
+
+-- | Multiply modulo 2^32. Plain `*` goes through a double and loses low bits.
+imul :: Int -> Int -> Int
+imul a b = al * bl + ((ah * bl + al * bh) `shl` 16)
+  where
+  ah = a `zshr` 16
+  al = a `and` 65535
+  bh = b `zshr` 16
+  bl = b `and` 65535
+
+-- | Base 36 of a whole number that may not fit in an `Int`.
+digits :: Number -> String
+digits = go ""
+  where
+  go acc value =
+    let
+      rest = Number.floor (value / 36.0)
+      digit = toStringAs base36 (floor (value - rest * 36.0)) <> acc
+    in
+      if rest == 0.0 then digit else go digit rest
 
 -- | One declaration. Use longhand or logical properties so composition has
 -- | one clear result.

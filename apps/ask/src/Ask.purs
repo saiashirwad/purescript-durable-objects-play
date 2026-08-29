@@ -11,18 +11,18 @@ import Ai.Provider as Provider
 import Ai.Schema as Schema
 import Data.DateTime.Instant (toDateTime)
 import Data.Either (Either(..))
+import Data.Maybe (fromMaybe)
 import Data.Formatter.DateTime (formatDateTime)
 import Effect (Effect)
 import Effect.Aff (launchAff_)
 import Effect.Class (liftEffect)
 import Effect.Class.Console (log)
 import Effect.Now (now)
-
-foreign import apiKey :: Effect String
+import Node.Process (lookupEnv)
 
 main :: Effect Unit
 main = launchAff_ do
-  key <- liftEffect apiKey
+  key <- liftEffect $ fromMaybe "" <$> lookupEnv "DEEPSEEK_API_KEY"
   let
     clock = tool "clock" "The current date and time, UTC"
       (Schema.object {})

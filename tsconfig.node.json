@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "es2022"
+    ],
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "types/global.d.ts",
+    "lib/durable/src/**/Simulator.js"
+  ]
+}
