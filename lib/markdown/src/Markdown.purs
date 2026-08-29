@@ -6,6 +6,7 @@ module Markdown
   , Inline(..)
   , inlines
   , mentions
+  , validMentionName
   , nodes
   , parse
   , plain
@@ -83,6 +84,15 @@ mentions = nub <<< mapMaybe mention <<< nodes <<< parse
   mention = case _ of
     Mention n -> Just n
     _ -> Nothing
+
+-- | Whether a whole string can be written as one parsed `@mention`.
+validMentionName :: String -> Boolean
+validMentionName name = not (null points) && Array.all isNameCodePoint points
+  where
+  points = toCodePointArray name
+
+isNameCodePoint :: CodePoint -> Boolean
+isNameCodePoint x = isAlphaNum x || x == codePointFromChar '_' || x == codePointFromChar '-' || x == codePointFromChar '.'
 
 -- | The text alone, for previews and notifications.
 plain :: String -> String
@@ -204,6 +214,6 @@ inlines = merge <<< go <<< toCodePointArray
     where
     stripTrailing t = if CU.takeRight 1 t `Array.elem` [ ".", ",", "!", "?", ":" ] then CU.dropRight 1 t else t
 
-  isName x = isAlphaNum x || x == cp '_' || x == cp '-' || x == cp '.'
+  isName = isNameCodePoint
   cp = codePointFromChar
   str = fromCodePointArray

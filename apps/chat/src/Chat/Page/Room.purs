@@ -146,7 +146,7 @@ enter :: forall m. MonadAff m => RoomId -> App m Unit
 enter id = do
   liftEffect $ Location.setHash (Chat.printRoomId id) =<< location
   state <- H.get
-  if blank state.author then H.modify_ _ { view = Joining { id, name: "" } }
+  if blank state.author then H.modify_ _ { view = Joining { id, name: "", error: Nothing } }
   else do
     let token = state.nextRoomToken
     H.modify_ _ { nextRoomToken = advanceRoomToken token }

@@ -73,7 +73,7 @@ type Locked = { passkey :: String, error :: Maybe String, busy :: Boolean }
 
 type Lobby = { busy :: Boolean, error :: Maybe String }
 
-type Joining = { id :: RoomId, name :: String }
+type Joining = { id :: RoomId, name :: String, error :: Maybe String }
 
 type RoomView =
   { token :: RoomToken

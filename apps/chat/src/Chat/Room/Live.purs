@@ -12,7 +12,8 @@ import Ai.Model as Model
 import Ai.Provider as Provider
 import Ai.Schema as Schema
 import Markdown as Markdown
-import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, appendMessage, assistantName, maxTextLength, room, toggleReaction)
+import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, UserNameError(..), appendMessage, assistantName, maxTextLength, mkUserName, printUserName, room, toggleReaction)
+import Chat.Room.Images as Images
 import Cloudflare.Durable (Handlers, Init, Live, Runtime, State)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Alarm as Alarm
@@ -20,23 +21,15 @@ import Cloudflare.Durable.Rpc (Rpc, fail)
 import Cloudflare.Durable.Runtime (class MonadRuntime, liftRuntime)
 import Cloudflare.Durable.Sockets (Sockets)
 import Cloudflare.Durable.Sockets as Sockets
-import Cloudflare.Durable.Sql (Statement)
-import Cloudflare.Durable.Sql as Sql
 import Cloudflare.Durable.Storage as Storage
-import Cloudflare.Worker as Worker
 import Data.Array (any, find, last, nub, null, takeEnd)
-import Data.Codec.Argonaut as CA
-import Data.Codec.Argonaut.Record as CAR
 import Data.DateTime.Instant (unInstant)
-import Data.Divide (divided)
 import Data.Either (Either(..), either)
 import Data.Foldable (foldMap, for_)
 import Data.Functor.Contravariant (cmap)
-import Data.Int (fromString)
-import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Newtype (unwrap)
-import Data.Profunctor (lcmap)
-import Data.String (Pattern(..), joinWith, length, stripPrefix, toLower, trim)
+import Data.String (joinWith, length, toLower, trim)
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple.Nested ((/\))
 import Data.Variant (Variant, inj)
@@ -54,6 +47,7 @@ import Type.Proxy (Proxy(..))
 type Room =
   { state :: State
   , messages :: Ref (Array Message)
+  , images :: Images.Images
   , emit :: Channels
   , assistant :: Maybe (Model Aff)
   , search :: Maybe Exa.Search
@@ -96,10 +90,13 @@ open modelFor = ado
   exaKey <- Durable.optional "EXA_API_KEY"
   in
     do
-      Sql.execute state createImages unit
+      images <- Images.open state
       history <- loadMessages state
       messages <- liftEffect $ Ref.new history
-      pure { state, messages, emit: channels sockets, assistant: modelFor <$> apiKey, search: Exa.search <$> exaKey }
+      attachedAt <- liftEffect $ unwrap <<< unInstant <$> now
+      for_ history \message -> Images.attach images attachedAt message.images
+      Images.cleanup images
+      pure { state, messages, images, emit: channels sockets, assistant: modelFor <$> apiKey, search: Exa.search <$> exaKey }
 
 handlersFor :: Room -> Handlers RoomApi
 handlersFor r =
@@ -112,7 +109,7 @@ handlersFor r =
     }
     `Durable.withHooks`
       ( Durable.alarmHook (answer r)
-          <> Durable.fetchHook (images r.state)
+          <> Images.hooks r.images
           <> Durable.connectHook (Sockets.broadcast r.emit.joined <<< _.tag)
           <> Durable.disconnectHook (Sockets.broadcast r.emit.left <<< _.tag)
       )
@@ -171,22 +168,28 @@ record r new = do
   all <- liftEffect $ Ref.read r.messages
   let message /\ messages = appendMessage sentAt new all
   save r messages
+  Images.attach r.images sentAt new.images
   Sockets.broadcast r.emit.message message
   pure message
 
 -- | Validate, record, and queue a reply if the assistant was mentioned.
 post :: Room -> NewMessage -> Rpc PostError Message
 post r new = do
-  let author = trim new.author
   let body = trim new.text
-  when (author == "") $ fail AuthorRequired
+  user <- case mkUserName new.author of
+    Left UserNameRequired -> fail AuthorRequired
+    Left UserNameTooLong -> fail AuthorTooLong
+    Left UserNameInvalid -> fail AuthorInvalid
+    Left UserNameReserved -> fail AuthorReserved
+    Right accepted -> pure accepted
+  let author = printUserName user
   when (body == "" && null new.images) $ fail TextRequired
-  when (length body > maxTextLength) $ fail TextTooLong
   all <- liftEffect $ Ref.read r.messages
+  when (length body > maxTextLength) $ fail TextTooLong
   for_ new.replyTo \id -> unless (any (_.id >>> eq id) all) $ fail $ NoSuchReply id
   for_ new.images \id -> do
-    found <- Sql.first r.state imageExists id
-    unless (isJust found) $ fail $ NoSuchImage id
+    found <- liftRuntime $ Images.exists r.images id
+    unless found $ fail $ NoSuchImage id
   message <- liftRuntime $ record r new { author = author, text = body }
   when (toLower author /= toLower assistantName && any (\mention -> toLower mention == toLower assistantName) message.mentions) do
     Storage.put r.state pendingKey message.id
@@ -196,9 +199,14 @@ post r new = do
 react :: Room -> { id :: Int, emoji :: String, by :: String } -> Rpc ReactError Message
 react r { id, emoji, by } = do
   let normalizedEmoji = trim emoji
-  let normalizedReactor = trim by
   when (normalizedEmoji == "") $ fail EmojiRequired
-  when (normalizedReactor == "") $ fail ReactorRequired
+  reactor <- case mkUserName by of
+    Left UserNameRequired -> fail ReactorRequired
+    Left UserNameTooLong -> fail ReactorTooLong
+    Left UserNameInvalid -> fail ReactorInvalid
+    Left UserNameReserved -> fail ReactorReserved
+    Right accepted -> pure accepted
+  let normalizedReactor = printUserName reactor
   all <- liftEffect $ Ref.read r.messages
   case find (_.id >>> eq id) all of
     Nothing -> fail $ NoSuchMessage id
@@ -208,52 +216,6 @@ react r { id, emoji, by } = do
         save r $ all <#> \m -> if m.id == id then message else m
         Sockets.broadcast r.emit.updated message
       pure message
-
--- Images, in the room's SQLite, served by the fetch hook -------------------------
-
-createImages :: Statement Unit Unit
-createImages = Sql.statement
-  "CREATE TABLE IF NOT EXISTS images (id INTEGER PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL)"
-  Sql.noParams
-  (pure unit)
-
-insertImage :: Statement { mime :: String, data :: String } Int
-insertImage = lcmap (\i -> i.mime /\ i.data) $ Sql.statement
-  "INSERT INTO images (mime, data) VALUES (?, ?) RETURNING id"
-  (Sql.param CA.string `divided` Sql.param CA.string)
-  (Sql.columnOf "id")
-
-selectImage :: Statement Int { mime :: String, data :: String }
-selectImage = Sql.statement
-  "SELECT mime, data FROM images WHERE id = ?"
-  Sql.paramOf
-  ({ mime: _, data: _ } <$> Sql.columnOf "mime" <*> Sql.columnOf "data")
-
-imageExists :: Statement Int Int
-imageExists = Sql.statement "SELECT id FROM images WHERE id = ?" Sql.paramOf (Sql.columnOf "id")
-
--- | Base64 of 4 MB.
-maxImageChars :: Int
-maxImageChars = 5600000
-
--- | `POST /image` (body: the bytes, header: its type) answers `{ "id": n }`;
--- | `GET /image/<n>` serves it. A request that does not match an image route
--- | returns `Nothing`, so other fetch hooks get their turn.
-images :: State -> Worker.Request -> Runtime (Maybe Worker.Response)
-images state request = case Worker.method request, Worker.pathname request of
-  "POST", "/image"
-    | Just _ <- Worker.header request "content-type" >>= stripPrefix (Pattern "image/") -> do
-        body <- liftAff $ Worker.bodyBase64 request
-        if length body > maxImageChars then pure $ Just $ Worker.text 413 "image too large"
-        else Sql.first state insertImage { mime: fromMaybe "" (Worker.header request "content-type"), data: body } <#> case _ of
-          Nothing -> Just $ Worker.text 500 "could not store image"
-          Just id -> Just $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: CA.int }) { id }
-    | otherwise -> pure $ Just $ Worker.text 415 "send an image/* body"
-  "GET", path | Just id <- stripPrefix (Pattern "/image/") path >>= fromString ->
-    Sql.first state selectImage id <#> case _ of
-      Just image -> Just $ Worker.bytes 200 image.mime image.data
-      Nothing -> Just $ Worker.text 404 "no such image"
-  _, _ -> pure Nothing
 
 -- The assistant --------------------------------------------------------------------
 

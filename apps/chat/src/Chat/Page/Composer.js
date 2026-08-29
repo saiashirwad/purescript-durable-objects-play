@@ -3,15 +3,22 @@
 // bodies have no complete PureScript binding, so this stays JS.
 
 /**
- * Shrink to at most 1600px on the long side. Keep alpha-capable raster types.
- * Keep animated GIF and vector SVG files unchanged.
- * Falls back to the original file whenever the browser cannot decode or encode it.
+ * MIME types accepted by the room's upload boundary.
+ *
+ * @type {ReadonlySet<string>}
+ */
+const supportedImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+
+/**
+ * Shrink to at most 1600px on the long side. Keep alpha-capable raster types
+ * and animated GIF files unchanged. Falls back to the original file whenever
+ * the browser cannot decode or encode it.
  *
  * @param {File} file
  * @returns {Promise<Blob>}
  */
 const shrink = (file) => {
-  if (file.type === "image/gif" || file.type === "image/svg+xml") return Promise.resolve(file);
+  if (file.type === "image/gif") return Promise.resolve(file);
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
@@ -61,8 +68,13 @@ const upload = async (endpoint, files) => {
   /** @type {number[]} */
   const ids = [];
   for (const file of files) {
-    if (!file.type.startsWith("image/")) continue;
+    if (!supportedImageTypes.has(file.type)) {
+      throw new Error("upload failed: choose a JPEG, PNG, WebP, GIF, or AVIF image");
+    }
     const blob = await shrink(file);
+    if (!supportedImageTypes.has(blob.type)) {
+      throw new Error("upload failed: the browser produced an unsupported image type");
+    }
     const response = await fetch(endpoint, { method: "POST", headers: { "content-type": blob.type }, body: blob });
     if (!response.ok) throw new Error(`upload failed: HTTP ${response.status}`);
     // Response.json returns any, so keep the server value unknown until imageId checks it.

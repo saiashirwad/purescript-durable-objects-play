@@ -26,6 +26,7 @@ module Cloudflare.Worker
   , requestTo
   , requestWith
   , responseText
+  , responseHeader
   , status
   , route
   , scriptName
@@ -77,6 +78,7 @@ foreign import requestTo :: String -> Request
 foreign import requestWith :: { url :: String, method :: String, contentType :: String, base64 :: String } -> Request
 foreign import bodyBase64Impl :: Request -> Effect (Promise String)
 foreign import bytes :: Int -> String -> String -> Response
+foreign import responseHeaderImpl :: Response -> String -> Nullable String
 foreign import status :: Response -> Int
 foreign import responseTextImpl :: Response -> Effect (Promise String)
 foreign import variableImpl :: Foreign -> String -> Effect String
@@ -102,6 +104,9 @@ body = toAffE <<< bodyImpl
 
 responseText :: Response -> Aff String
 responseText = toAffE <<< responseTextImpl
+
+responseHeader :: Response -> String -> Maybe String
+responseHeader response = toMaybe <<< responseHeaderImpl response
 
 -- | The request body, base64.
 bodyBase64 :: Request -> Aff String

@@ -10,7 +10,7 @@
   },
   "include": [
     "types/global.d.ts",
-    "apps/chat/src/**/*.js",
+    "apps/chat/src/Chat/Page/**/*.js",
     "lib/ui/src/**/*.js"
   ]
 }

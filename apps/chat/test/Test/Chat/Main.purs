@@ -6,6 +6,7 @@ import Ai (Finish(..), Message(..))
 import Ai.Model as Model
 import Chat.Room (PostError(..), ReactError(..), RoomEvents)
 import Chat.Room as ChatRoom
+import Chat.Room.Images as Images
 import Chat.Room.Live (roomLive, roomLiveWith)
 import Chat.Page.Composer as Composer
 import Chat.Page.Messages as Messages
@@ -27,6 +28,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple (Tuple(..))
+import Data.String.CodeUnits as CodeUnits
 import Data.Variant (Variant, match)
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
@@ -53,6 +55,13 @@ main = launchAff_ do
     let chat = Durable.getByName rooms "validation"
     result <- Rpc.run $ chat.post { author: "ann", text: "   ", images: [], replyTo: Nothing }
     pure $ result == Left (DomainError TextRequired)
+  check "usernames follow mention syntax and reserve the assistant name" do
+    let accepted = ChatRoom.printUserName <$> ChatRoom.mkUserName " ann-1 "
+    invalid <- Rpc.run $ (Durable.getByName rooms "invalid-user").post { author: "Sai Ashirwad", text: "hi", images: [], replyTo: Nothing }
+    reserved <- Rpc.run $ (Durable.getByName rooms "reserved-user").post { author: "AI", text: "hi", images: [], replyTo: Nothing }
+    pure $ accepted == Right "ann-1"
+      && invalid == Left (DomainError AuthorInvalid)
+      && reserved == Left (DomainError AuthorReserved)
 
   check "nullary domain errors reject an unexpected id" do
     let
@@ -184,19 +193,41 @@ main = launchAff_ do
     pure $ map _.reactions normalized == Right [ { emoji: "👍", by: [ "ann" ] } ]
       && blankReactor == Left (DomainError ReactorRequired)
 
-  check "images round-trip through the room's fetch hook and validate on post" do
+  check "image uploads enforce MIME, signatures, size, and safe serving" do
     id <- Durable.newUniqueId rooms
     let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
     uploaded <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
     body <- Worker.responseText uploaded
-    rejected <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "text/plain", base64: "aGk=" }
+    text <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "text/plain", base64: "aGk=" }
+    svg <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/svg+xml", base64: "PHN2Zz48L3N2Zz4=" }
+    mismatch <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: "aGk=" }
+    let oversized = "iVBORw0KGgoA" <> CodeUnits.fromCharArray (Array.replicate Images.maxImageChars 'A')
+    tooLarge <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: oversized }
     served <- Durable.http rooms id $ Worker.requestTo "http://room/image/1"
     missing <- Durable.http rooms id $ Worker.requestTo "http://room/image/9"
     posted <- Rpc.run $ (Durable.get rooms id).post { author: "ann", text: "", images: [ 1 ], replyTo: Nothing }
-    pure $ Worker.status uploaded == 200 && body == "{\"id\":1}" && Worker.status rejected == 415
+    pure $ Worker.status uploaded == 200 && body == "{\"id\":1}"
+      && Worker.status text == 415
+      && Worker.status svg == 415
+      && Worker.status mismatch == 415
+      && Worker.status tooLarge == 413
       && Worker.status served == 200
+      && Worker.responseHeader served "x-content-type-options" == Just "nosniff"
       && Worker.status missing == 404
       && map _.images posted == Right [ 1 ]
+
+  check "abandoned uploads expire while attached images remain" do
+    mediaTimeline <- Simulator.clock
+    mediaRooms <- Simulator.simulateOn mediaTimeline roomLive
+    id <- Durable.newUniqueId mediaRooms
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    _ <- Durable.http mediaRooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
+    _ <- Durable.http mediaRooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
+    _ <- Rpc.run $ (Durable.get mediaRooms id).post { author: "ann", text: "", images: [ 2 ], replyTo: Nothing }
+    Simulator.advance mediaTimeline (Milliseconds 86400001.0)
+    abandoned <- Durable.http mediaRooms id $ Worker.requestTo "http://room/image/1"
+    attached <- Durable.http mediaRooms id $ Worker.requestTo "http://room/image/2"
+    pure $ Worker.status abandoned == 404 && Worker.status attached == 200
 
   check "a matched fetch hook stops later hooks" do
     layered <- Simulator.simulate $ withLiveHooks

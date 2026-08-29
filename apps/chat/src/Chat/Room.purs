@@ -6,8 +6,8 @@ module Chat.Room
   , Reaction
   , RoomApi
   , RoomEvents
+  , module Domain
   , appendMessage
-  , assistantName
   , describePostError
   , describeReactError
   , maxTextLength
@@ -20,6 +20,8 @@ import Prelude
 import Cloudflare.Durable (Object)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Codec (class HasCodec)
+import Chat.Room.Domain (UserNameError(..), describeUserNameError)
+import Chat.Room.Domain (UserName, UserNameError(..), assistantName, describeUserNameError, maxUserNameLength, mkUserName, printUserName) as Domain
 import Cloudflare.Durable.Rpc (NoError, Rpc, method)
 import Data.Array (elem, filter, find, last, null, snoc, takeEnd)
 import Data.Codec.Argonaut (JsonCodec)
@@ -47,12 +49,12 @@ type Message =
 
 type NewMessage = { author :: String, text :: String, images :: Array Int, replyTo :: Maybe Int }
 
-assistantName :: String
-assistantName = "ai"
-
 data PostError
   = AuthorRequired
   | TextRequired
+  | AuthorTooLong
+  | AuthorInvalid
+  | AuthorReserved
   | TextTooLong
   | NoSuchReply Int
   | NoSuchImage Int
@@ -63,6 +65,9 @@ instance showPostError :: Show PostError where
   show = case _ of
     AuthorRequired -> "AuthorRequired"
     TextRequired -> "TextRequired"
+    AuthorTooLong -> "AuthorTooLong"
+    AuthorInvalid -> "AuthorInvalid"
+    AuthorReserved -> "AuthorReserved"
     TextTooLong -> "TextTooLong"
     NoSuchReply id -> "(NoSuchReply " <> show id <> ")"
     NoSuchImage id -> "(NoSuchImage " <> show id <> ")"
@@ -70,6 +75,9 @@ instance showPostError :: Show PostError where
 describePostError :: PostError -> String
 describePostError = case _ of
   AuthorRequired -> "Enter your name."
+  AuthorTooLong -> describeUserNameError UserNameTooLong
+  AuthorInvalid -> describeUserNameError UserNameInvalid
+  AuthorReserved -> describeUserNameError UserNameReserved
   TextRequired -> "Write a message or attach an image."
   TextTooLong -> "The message is too long."
   NoSuchReply _ -> "The message you replied to is not available."
@@ -83,6 +91,9 @@ instance hasCodecPostError :: HasCodec PostError where
     where
     print = case _ of
       AuthorRequired -> "AuthorRequired" /\ Nothing
+      AuthorTooLong -> "AuthorTooLong" /\ Nothing
+      AuthorInvalid -> "AuthorInvalid" /\ Nothing
+      AuthorReserved -> "AuthorReserved" /\ Nothing
       TextRequired -> "TextRequired" /\ Nothing
       TextTooLong -> "TextTooLong" /\ Nothing
       NoSuchReply id -> "NoSuchReply" /\ Just id
@@ -90,12 +101,15 @@ instance hasCodecPostError :: HasCodec PostError where
     read = case _ of
       "AuthorRequired" /\ Nothing -> Just AuthorRequired
       "TextRequired" /\ Nothing -> Just TextRequired
+      "AuthorTooLong" /\ Nothing -> Just AuthorTooLong
+      "AuthorInvalid" /\ Nothing -> Just AuthorInvalid
+      "AuthorReserved" /\ Nothing -> Just AuthorReserved
       "TextTooLong" /\ Nothing -> Just TextTooLong
       "NoSuchReply" /\ Just id -> Just (NoSuchReply id)
       "NoSuchImage" /\ Just id -> Just (NoSuchImage id)
       _ -> Nothing
 
-data ReactError = NoSuchMessage Int | EmojiRequired | ReactorRequired
+data ReactError = NoSuchMessage Int | EmojiRequired | ReactorRequired | ReactorTooLong | ReactorInvalid | ReactorReserved
 
 derive instance eqReactError :: Eq ReactError
 
@@ -104,12 +118,18 @@ instance showReactError :: Show ReactError where
     NoSuchMessage id -> "(NoSuchMessage " <> show id <> ")"
     EmojiRequired -> "EmojiRequired"
     ReactorRequired -> "ReactorRequired"
+    ReactorTooLong -> "ReactorTooLong"
+    ReactorInvalid -> "ReactorInvalid"
+    ReactorReserved -> "ReactorReserved"
 
 describeReactError :: ReactError -> String
 describeReactError = case _ of
   NoSuchMessage _ -> "That message is not available."
   EmojiRequired -> "Select a reaction."
   ReactorRequired -> "Enter your name."
+  ReactorTooLong -> describeUserNameError UserNameTooLong
+  ReactorInvalid -> describeUserNameError UserNameInvalid
+  ReactorReserved -> describeUserNameError UserNameReserved
 
 instance hasCodecReactError :: HasCodec ReactError where
   codec = tagged "ReactError" print read
@@ -118,10 +138,16 @@ instance hasCodecReactError :: HasCodec ReactError where
       NoSuchMessage id -> "NoSuchMessage" /\ Just id
       EmojiRequired -> "EmojiRequired" /\ Nothing
       ReactorRequired -> "ReactorRequired" /\ Nothing
+      ReactorTooLong -> "ReactorTooLong" /\ Nothing
+      ReactorInvalid -> "ReactorInvalid" /\ Nothing
+      ReactorReserved -> "ReactorReserved" /\ Nothing
     read = case _ of
       "NoSuchMessage" /\ Just id -> Just (NoSuchMessage id)
       "EmojiRequired" /\ Nothing -> Just EmojiRequired
       "ReactorRequired" /\ Nothing -> Just ReactorRequired
+      "ReactorTooLong" /\ Nothing -> Just ReactorTooLong
+      "ReactorInvalid" /\ Nothing -> Just ReactorInvalid
+      "ReactorReserved" /\ Nothing -> Just ReactorReserved
       _ -> Nothing
 
 tagged :: forall a. String -> (a -> Tuple String (Maybe Int)) -> (Tuple String (Maybe Int) -> Maybe a) -> JsonCodec a

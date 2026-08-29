@@ -13,12 +13,13 @@ import Chat.Client (RoomId)
 import Chat.Client as Chat
 import Chat.Page.Browser (NotificationPermission(..), localStorage, location, notificationPermission, requestNotifications)
 import Chat.Page.Room as Room
+import Chat.Room (describeUserNameError, mkUserName, printUserName)
 import Chat.Page.Shared (blank)
 import Chat.Page.Types (App, Joining, Lobby, Locked, SessionAction(..), View(..))
 import Chat.Style (styles)
 import Control.Monad.Error.Class (catchError)
 import Data.Argonaut.Core as J
-import Data.Either (Either(..))
+import Data.Either (Either(..), either)
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String (drop, trim)
 import Effect.Aff (Aff, attempt)
@@ -100,10 +101,11 @@ lobbyView { busy, error } = screen $
     ]
 
 joiningView :: forall w. Joining -> HH.HTML w SessionAction
-joiningView { name } = screen $
+joiningView { name, error } = screen $
   HH.form [ css styles.card, HE.onSubmit SubmitName ]
     [ HH.h1 [ css styles.title ] [ HH.text "Who are you?" ]
     , HH.p [ css styles.lead ] [ HH.text "The name others will see in this room." ]
+    , maybe (HH.text "") (\why -> Status.error [ HH.text why ]) error
     , Field.input ((Field.defaults "chat-name" "Your name") { required = true })
         [ HP.placeholder "Your name", HP.autofocus true, HP.value name, HE.onValueInput SetName ]
     , Button.submit (primary { disabled = blank name }) [] [ HH.text "Join" ]
@@ -113,7 +115,8 @@ handle :: forall m. MonadAff m => SessionAction -> App m (Maybe RoomId)
 handle = case _ of
   Initialize -> do
     H.modify_ _ { view = Loading }
-    author <- liftEffect $ fromMaybe "" <$> (Storage.getItem authorKey =<< localStorage)
+    stored <- liftEffect $ fromMaybe "" <$> (Storage.getItem authorKey =<< localStorage)
+    let author = either (const "") printUserName $ mkUserName stored
     notifications <- liftEffect notificationPermission
     H.modify_ _ { author = author, notifications = notifications }
     outcome <- liftAff $ attempt sessionStatus
@@ -148,19 +151,22 @@ handle = case _ of
           Left _ -> modifyLobby (_ { busy = false, error = Just "Could not create a room." }) $> Nothing
           Right id -> pure $ Just id
       _ -> pure Nothing
-  SetName name -> modifyJoining (_ { name = name }) $> Nothing
+  SetName name -> modifyJoining (_ { name = name, error = Nothing }) $> Nothing
   SubmitName event -> do
     liftEffect $ preventDefault event
     state <- H.get
     case state.view of
-      Joining { id, name } | not (blank name) -> do
-        liftEffect $ Storage.setItem authorKey (trim name) =<< localStorage
-        H.modify_ _ { author = trim name }
-        pure $ Just id
+      Joining joining -> case mkUserName joining.name of
+        Left why -> modifyJoining (_ { error = Just $ describeUserNameError why }) $> Nothing
+        Right name -> do
+          let author = printUserName name
+          liftEffect $ Storage.setItem authorKey author =<< localStorage
+          H.modify_ _ { author = author }
+          pure $ Just joining.id
       _ -> pure Nothing
   ChangeName -> do
     author <- H.gets _.author
-    Room.leaveRoom \room -> Joining { id: room.id, name: author }
+    Room.leaveRoom \room -> Joining { id: room.id, name: author, error: Nothing }
     pure Nothing
   EnableNotifications -> do
     outcome <- liftAff $ catchError requestNotifications (const $ pure Unsupported)

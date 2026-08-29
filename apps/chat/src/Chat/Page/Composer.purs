@@ -75,7 +75,7 @@ composer author room typing =
         , HH.input
             [ HP.ref fileRef
             , HP.type_ HP.InputFile
-            , HP.attr (HH.AttrName "accept") "image/*"
+            , HP.attr (HH.AttrName "accept") "image/jpeg,image/png,image/webp,image/gif,image/avif"
             , HP.multiple true
             , HP.disabled $ not $ isEditing room
             , HP.style "display:none"
