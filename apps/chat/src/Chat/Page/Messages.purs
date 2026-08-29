@@ -9,10 +9,9 @@ module Chat.Page.Messages
 
 import Prelude
 
-import Chat.Client (RoomId)
-import Chat.Client as Chat
 import Chat.Page.Browser (formatTime)
 import Chat.Page.Icons (replyIcon)
+import Chat.Page.Shared (avatar, imageUrl, quiet)
 import Chat.Page.Types (RoomView)
 import Chat.Room (Message, assistantName)
 import Chat.Style (styles)
@@ -31,23 +30,16 @@ import Halogen.HTML.Properties as HP
 import Halogen.HTML.Properties.ARIA as ARIA
 import Markdown (Block(..), Inline(..))
 import Markdown as Markdown
-import UI.Avatar as Avatar
 import UI.Button as Button
-import UI.Core (Size(..), Tone(..), dataAttr)
+import UI.Core (dataAttr)
 import UI.Icon as Icon
-import UI.Style (Style, css)
+import UI.Style (css)
 
 type Actions action =
   { react :: Int -> String -> action
   , jumpTo :: Int -> action
   , reply :: Maybe Int -> action
   }
-
-small :: Button.Options
-small = Button.defaults { size = Small }
-
-quiet :: Button.Options
-quiet = small { tone = Quiet }
 
 messageList :: forall action w. Actions action -> String -> RoomView -> HH.HTML w action
 messageList actions author room =
@@ -148,14 +140,9 @@ markdown me mine = map block <<< Markdown.parse
 threaded :: Array Message -> Array (Tuple Boolean Message)
 threaded messages = zip ([ false ] <> (continues <$> zip messages (Array.drop 1 messages))) messages
   where
-  continues (Tuple previous next) = previous.author == next.author && next.sentAt - previous.sentAt < 300000.0 && next.replyTo == Nothing
+  continues (Tuple previous next) =
+    previous.author == next.author && next.sentAt - previous.sentAt < threadWindow && next.replyTo == Nothing
 
-avatar :: forall action w. Style -> String -> HH.HTML w action
-avatar extra name = Avatar.avatar
-  { fallback: if name == assistantName then "✦" else String.toUpper $ String.take 1 name
-  , hue: Avatar.hue name
-  , styles: extra
-  }
-
-imageUrl :: RoomId -> Int -> String
-imageUrl id n = "/rpc/Room/id/" <> Chat.printRoomId id <> "/http/image/" <> show n
+-- | How close two messages must be in time for one to continue the other.
+threadWindow :: Number
+threadWindow = 300000.0

@@ -11,6 +11,7 @@ module Chat.Client
   , open
   , parseRoomId
   , printRoomId
+  , rpc
   ) where
 
 import Prelude
@@ -32,6 +33,10 @@ type RoomId = ObjectId "Room"
 
 connect :: String -> Chat
 connect prefix = Chat $ Client.connect prefix room
+
+-- | The app's one connection: the `Room` namespace under `/rpc`.
+rpc :: Chat
+rpc = connect "/rpc"
 
 create :: Chat -> Aff RoomId
 create (Chat rooms) = Durable.newUniqueId rooms

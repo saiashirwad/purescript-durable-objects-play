@@ -7,16 +7,18 @@ module Chat.Page.Session
 
 import Prelude
 
-import Chat.Client (Chat, RoomId)
+import Chat.Client (RoomId)
 import Chat.Client as Chat
 import Chat.Page.Browser (localStorage, location, notificationPermission, requestNotifications)
-import Chat.Page.Types (App, Joining, Locked, SessionAction(..), View(..), _Joining, _Locked, _view, withRoom)
+import Chat.Page.Room as Room
+import Chat.Page.Shared (blank)
+import Chat.Page.Types (App, Joining, Locked, SessionAction(..), View(..), _Joining, _Locked, _view)
 import Chat.Style (styles)
 import Control.Promise (toAffE)
 import Data.Argonaut.Core as J
 import Data.Lens (over, preview)
 import Data.Maybe (Maybe(..), fromMaybe)
-import Data.String (drop, null, trim)
+import Data.String (drop, trim)
 import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Effect.Class (liftEffect)
@@ -38,6 +40,10 @@ import Web.Storage.Storage as Storage
 sessionStatus :: Aff Int
 sessionStatus = _.status <$> fetch "/session" {}
 
+-- | The session endpoints answer 204 when allowed.
+admitted :: Int -> Boolean
+admitted status = status == 204
+
 -- | 204 when the passkey is right.
 login :: String -> Aff Int
 login passkey = _.status <$> fetch "/login"
@@ -45,9 +51,6 @@ login passkey = _.status <$> fetch "/login"
   , headers: { "content-type": "application/json" }
   , body: J.stringify $ J.fromObject $ Object.singleton "passkey" $ J.fromString passkey
   }
-
-chat :: Chat
-chat = Chat.connect "/rpc"
 
 primary :: Button.Options
 primary = Button.defaults { tone = Accent, styles = styles.wide }
@@ -93,8 +96,8 @@ handle = case _ of
     author <- liftEffect $ fromMaybe "" <$> (Storage.getItem authorKey =<< localStorage)
     notifications <- liftEffect notificationPermission
     H.modify_ _ { author = author, notifications = notifications }
-    admitted <- liftAff sessionStatus
-    if admitted == 204 then roomFromUrl
+    status <- liftAff sessionStatus
+    if admitted status then roomFromUrl
     else H.modify_ _ { view = Locked { passkey: "", error: Nothing, busy: false } } $> Nothing
   SetPasskey passkey ->
     H.modify_ (over (_view <<< _Locked) _ { passkey = passkey, error = Nothing }) $> Nothing
@@ -104,13 +107,13 @@ handle = case _ of
       Nothing -> pure Nothing
       Just locked -> do
         H.modify_ $ over (_view <<< _Locked) _ { busy = true }
-        admitted <- liftAff $ login (trim locked.passkey)
-        if admitted == 204 then H.modify_ _ { view = Lobby { busy: false } } *> roomFromUrl
+        allowed <- admitted <$> liftAff (login (trim locked.passkey))
+        if allowed then H.modify_ _ { view = Lobby { busy: false } } *> roomFromUrl
         else H.modify_ (over (_view <<< _Locked) _ { busy = false, error = Just "That passkey is not right." }) $> Nothing
     pure result
   CreateRoom -> do
     H.modify_ _ { view = Lobby { busy: true } }
-    Just <$> liftAff (Chat.create chat)
+    Just <$> liftAff (Chat.create Chat.rpc)
   SetName name -> H.modify_ (over (_view <<< _Joining) _ { name = name }) $> Nothing
   SubmitName event -> do
     liftEffect $ preventDefault event
@@ -121,10 +124,7 @@ handle = case _ of
         pure $ Just id
       _ -> pure Nothing
   ChangeName -> do
-    withRoom \room -> do
-      H.unsubscribe room.feed
-      H.unsubscribe room.ticker
-      H.modify_ \state -> state { view = Joining { id: room.id, name: state.author } }
+    Room.leaveRoom \room state -> state { view = Joining { id: room.id, name: state.author } }
     pure Nothing
   EnableNotifications -> do
     outcome <- liftAff $ toAffE requestNotifications
@@ -134,10 +134,7 @@ handle = case _ of
 roomFromUrl :: forall m. MonadAff m => App m (Maybe RoomId)
 roomFromUrl = do
   fragment <- liftEffect $ drop 1 <$> (Location.hash =<< location)
-  pure $ Chat.parseRoomId chat fragment
-
-blank :: String -> Boolean
-blank = null <<< trim
+  pure $ Chat.parseRoomId Chat.rpc fragment
 
 authorKey :: String
 authorKey = "chat.author"

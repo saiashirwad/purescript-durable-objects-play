@@ -9,13 +9,14 @@ module Chat.Page.Composer
 
 import Prelude
 
-import Chat.Client (RoomId)
 import Chat.Client as Chat
+import Chat.Page.Browser (nowMs)
 import Chat.Page.Icons (imageIcon, replyIcon, sendIcon)
+import Chat.Page.Shared (avatar, blank, imageEndpoint, imageUrl, quiet, small)
 import Chat.Page.Types (App, ComposerAction(..), RoomView, inRoom, withRoom)
 import Chat.Room (Message, assistantName)
 import Chat.Style (styles)
-import Markdown as Markdown
+import Cloudflare.Durable.Rpc as Rpc
 import Control.Promise (Promise, toAffE)
 import Data.Array (filter, last, length, take)
 import Data.Array as Array
@@ -24,7 +25,7 @@ import Data.Foldable (traverse_)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Monoid (guard)
-import Data.String (Pattern(..), joinWith, null, split, stripPrefix, trim)
+import Data.String (Pattern(..), joinWith, split, stripPrefix)
 import Data.String as String
 import Effect (Effect)
 import Effect.Aff (attempt, message)
@@ -35,30 +36,22 @@ import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.HTML.Properties.ARIA as ARIA
-import UI.Avatar as Avatar
+import Markdown as Markdown
 import UI.Button as Button
-import UI.Core (Size(..), Tone(..), dataAttr)
+import UI.Core (Tone(..), dataAttr)
 import UI.Icon as Icon
 import UI.Input as Input
 import UI.Status as Status
-import UI.Style (Style, css)
+import UI.Style (css)
 import Web.Event.Event (Event, EventType(..), preventDefault)
 import Web.HTML.HTMLElement (focus)
 import Web.UIEvent.KeyboardEvent (key, toEvent)
-import Chat.Page.Browser (nowMs)
-import Cloudflare.Durable.Rpc as Rpc
 
 foreign import pickAndUpload :: String -> Effect (Promise (Array Int))
 foreign import uploadPasted :: String -> Event -> Effect (Promise (Array Int))
 
 composerRef :: H.RefLabel
 composerRef = H.RefLabel "composer"
-
-small :: Button.Options
-small = Button.defaults { size = Small }
-
-quiet :: Button.Options
-quiet = small { tone = Quiet }
 
 composer :: forall w. String -> RoomView -> HH.HTML w ComposerAction -> HH.HTML w ComposerAction
 composer author room typing =
@@ -190,24 +183,8 @@ replaceLastWord replacement draft =
   where
   words = split (Pattern " ") draft
 
-imageEndpoint :: RoomId -> String
-imageEndpoint id = "/rpc/Room/id/" <> Chat.printRoomId id <> "/http/image"
-
-imageUrl :: RoomId -> Int -> String
-imageUrl id n = imageEndpoint id <> "/" <> show n
-
 errorLine :: forall w action. Maybe String -> HH.HTML w action
 errorLine = maybe (HH.text "") \why -> Status.error [ HH.text why ]
-
-avatar :: forall w action. Style -> String -> HH.HTML w action
-avatar extra name = Avatar.avatar
-  { fallback: if name == assistantName then "✦" else String.toUpper $ String.take 1 name
-  , hue: Avatar.hue name
-  , styles: extra
-  }
-
-blank :: String -> Boolean
-blank = null <<< trim
 
 typingThrottle :: Number
 typingThrottle = 1500.0

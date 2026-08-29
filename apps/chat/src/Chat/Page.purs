@@ -61,4 +61,3 @@ handleAction = case _ of
   Composer action -> Composer.handle action
   Tick -> Room.tick
   Notified signal -> Room.onSignal signal
-  Loaded result -> Room.loaded result

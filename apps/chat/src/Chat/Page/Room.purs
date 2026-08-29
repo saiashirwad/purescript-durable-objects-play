@@ -1,24 +1,22 @@
 module Chat.Page.Room
   ( roomView
-  , roomTitle
-  , roomPeople
-  , onlineLabel
   , typingLine
   , handle
   , enter
   , onSignal
-  , loaded
+  , leaveRoom
   , tick
   ) where
 
 import Prelude
 
-import Chat.Client (Chat, RoomId)
+import Chat.Client (RoomId)
 import Chat.Client as Chat
 import Chat.Page.Browser (away, copyText, interval, location, nearBottom, notify, nowMs, scrollToEnd, scrollToId, setTitle)
 import Chat.Page.Icons (bellIcon, linkIcon)
+import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (Action(..), App, RoomAction(..), RoomView, State, View(..), inRoom, withRoom)
-import Chat.Room (Message, RoomEvents, assistantName)
+import Chat.Room (Message, RoomEvents)
 import Chat.Style (styles)
 import Cloudflare.Durable (Signal(..))
 import Cloudflare.Durable.Rpc as Rpc
@@ -28,7 +26,7 @@ import Data.Either (either)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Monoid (guard)
-import Data.String (joinWith, null, trim)
+import Data.String (joinWith)
 import Data.String as String
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
@@ -43,11 +41,10 @@ import Halogen.HTML.Properties as HP
 import Halogen.HTML.Properties.ARIA as ARIA
 import Halogen.Subscription (makeEmitter)
 import Markdown as Markdown
-import UI.Avatar as Avatar
 import UI.Button as Button
-import UI.Core (Size(..), Tone(..), dataAttr)
+import UI.Core (dataAttr)
 import UI.Icon as Icon
-import UI.Style (Style, css)
+import UI.Style (css)
 import Web.HTML.HTMLElement (HTMLElement)
 import Web.HTML.Location as Location
 
@@ -58,17 +55,8 @@ type ViewActions action =
   , leave :: action
   }
 
-chat :: Chat
-chat = Chat.connect "/rpc"
-
 messagesRef :: H.RefLabel
 messagesRef = H.RefLabel "messages"
-
-small :: Button.Options
-small = Button.defaults { size = Small }
-
-quiet :: Button.Options
-quiet = small { tone = Quiet }
 
 roomView :: forall action w. ViewActions action -> State -> RoomView -> HH.HTML w action -> HH.HTML w action -> HH.HTML w action
 roomView actions state room messages composer =
@@ -150,12 +138,12 @@ enter focusComposer id = do
   if blank author then H.modify_ _ { view = Joining { id, name: "" } }
   else do
     link <- liftEffect $ Location.href =<< location
-    feed <- H.subscribe $ Notified <$> Chat.listen chat id author
+    feed <- H.subscribe $ Notified <$> Chat.listen Chat.rpc id author
     ticker <- H.subscribe $ Tick <$ makeEmitter (interval 1000)
     H.modify_ _
       { view = InRoom
           { id
-          , room: Chat.open chat id
+          , room: Chat.open Chat.rpc id
           , link
           , draft: ""
           , replyTo: Nothing
@@ -246,20 +234,10 @@ withMessages action = H.getHTMLElementRef messagesRef >>= traverse (liftEffect <
 byId :: Array Message -> Map.Map Int Message
 byId = Map.fromFoldable <<< map \message -> Tuple message.id message
 
-avatar :: forall action w. Style -> String -> HH.HTML w action
-avatar extra name = Avatar.avatar
-  { fallback: if name == assistantName then "✦" else String.toUpper $ String.take 1 name
-  , hue: Avatar.hue name
-  , styles: extra
-  }
-
 shortId :: RoomId -> String
 shortId id = String.take 6 printed <> "…" <> String.drop (String.length printed - 4) printed
   where
   printed = Chat.printRoomId id
-
-blank :: String -> Boolean
-blank = null <<< trim
 
 typingTtl :: Number
 typingTtl = 3500.0

@@ -28,10 +28,9 @@ import Data.Lens (Lens', Prism', over, preview, prism')
 import Data.Lens.Record (prop)
 import Data.Map (Map)
 import Data.Maybe (Maybe(..))
+import Data.Variant (Variant)
 import Halogen as H
 import Type.Proxy (Proxy(..))
-import Data.Variant (Variant)
-import Effect.Aff.Class (class MonadAff)
 import Web.Event.Event (Event)
 import Web.UIEvent.KeyboardEvent (KeyboardEvent)
 
@@ -78,7 +77,6 @@ data Action
   | Composer ComposerAction
   | Tick
   | Notified (Signal (Variant RoomEvents))
-  | Loaded { messages :: Array Message, members :: Array String }
 
 data SessionAction
   = Initialize
@@ -132,5 +130,5 @@ _InRoom = prism' InRoom case _ of
 inRoom :: forall m. (RoomView -> RoomView) -> App m Unit
 inRoom = H.modify_ <<< over (_view <<< _InRoom)
 
-withRoom :: forall m. MonadAff m => (RoomView -> App m Unit) -> App m Unit
+withRoom :: forall m. (RoomView -> App m Unit) -> App m Unit
 withRoom k = H.gets (preview (_view <<< _InRoom)) >>= traverse_ k
