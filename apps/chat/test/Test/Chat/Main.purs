@@ -13,6 +13,7 @@ import Chat.Room.Live (roomLive, roomLiveWith)
 import Chat.Session as BrowserSession
 import Chat.Page.Composer as Composer
 import Chat.Page.Messages as Messages
+import Chat.Style.Message as MessageStyle
 import Cloudflare.Durable (Object, Signal(..))
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Codec (codec)
@@ -413,11 +414,11 @@ main = launchAff_ do
           , chatMessage 5 "bob" 400000.0 Nothing
           ] <#> \(Tuple position _) -> position
     pure $ flags ==
-      [ Messages.StartsThread
-      , Messages.ContinuesThread
-      , Messages.StartsThread
-      , Messages.StartsThread
-      , Messages.StartsThread
+      [ MessageStyle.Starts
+      , MessageStyle.Continues
+      , MessageStyle.Starts
+      , MessageStyle.Starts
+      , MessageStyle.Starts
       ]
 
   check "suggestions match names without case and exclude the author" do

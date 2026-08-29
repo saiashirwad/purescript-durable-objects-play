@@ -1,5 +1,16 @@
 module Chat.Style.Message
   ( Styles
+  , Continuity(..)
+  , Ownership(..)
+  , actions
+  , avatar
+  , bubble
+  , mention
+  , quote
+  , quoteText
+  , reaction
+  , reactions
+  , row
   , raw
   , sheet
   , styles
@@ -11,6 +22,18 @@ import Chat.Style.Foundation (gutters, hairline, wash)
 import UI.Style (Sheet, Style, (:=), create, var)
 import UI.Style as Style
 import UI.Theme (tokens)
+
+data Ownership
+  = Own
+  | Other
+
+derive instance eqOwnership :: Eq Ownership
+
+data Continuity
+  = Starts
+  | Continues
+
+derive instance eqContinuity :: Eq Continuity
 
 type Styles =
   { list :: Style
@@ -306,6 +329,70 @@ styles =
       , "color" := var tokens.accentText
       ]
   }
+
+row :: { ownership :: Ownership, continuity :: Continuity } -> Style
+row state =
+  styles.message
+    <> case state.ownership of
+      Own -> styles.mine
+      Other -> mempty
+    <> case state.continuity of
+      Starts -> mempty
+      Continues -> styles.continued
+
+bubble :: { ownership :: Ownership, continuity :: Continuity, mentioned :: Boolean } -> Style
+bubble state =
+  styles.bubble
+    <> case state.ownership of
+      Own -> styles.mineBubble
+      Other -> styles.theirsBubble
+    <> case state.ownership, state.continuity of
+      Own, Continues -> styles.mineJoined
+      Other, Continues -> styles.theirsJoined
+      _, Starts -> mempty
+    <> case state.mentioned of
+      true -> styles.mentionedBubble
+      false -> mempty
+
+quote :: Ownership -> Style
+quote = case _ of
+  Own -> styles.quote <> styles.mineQuote
+  Other -> styles.quote
+
+quoteText :: Ownership -> Style
+quoteText = case _ of
+  Own -> styles.quoteText <> styles.mineQuoteText
+  Other -> styles.quoteText
+
+reactions :: Ownership -> Style
+reactions = case _ of
+  Own -> styles.reactions <> styles.mineReactions
+  Other -> styles.reactions
+
+reaction :: Boolean -> Style
+reaction = case _ of
+  true -> styles.reaction <> styles.activeReaction
+  false -> styles.reaction
+
+actions :: Ownership -> Style
+actions = case _ of
+  Own -> styles.actions <> styles.mineActions
+  Other -> styles.actions
+
+mention :: { ownership :: Ownership, self :: Boolean } -> Style
+mention state =
+  styles.mention
+    <> case state.ownership of
+      Own -> styles.mineMention
+      Other -> mempty
+    <> case state.self of
+      true -> styles.selfMention
+      false -> mempty
+
+avatar :: Boolean -> Style
+avatar = case _ of
+  true -> styles.botAvatar
+  false -> mempty
 
 sheet :: Sheet
 sheet = Style.atoms (Style.sheetFromRecord styles) <> Style.global raw

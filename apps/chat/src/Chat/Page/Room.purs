@@ -17,7 +17,8 @@ import Chat.Page.Icons (bellIcon, linkIcon)
 import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (Action(..), App, ComposerStatus(..), RoomAction(..), RoomToken, RoomView, View(..), advanceRoomToken, modifyRoomAt, withRoom)
 import Chat.Room (Message, MessageId, RoomEvents, printAuthor, printMessageId)
-import Chat.Style.Room (styles)
+import Chat.Style.Room (Connection(..), styles)
+import Chat.Style.Room as RoomStyle
 import Cloudflare.Durable (Signal(..))
 import Data.Array (elem, length, mapWithIndex, replicate)
 import Data.Array as Array
@@ -76,7 +77,7 @@ roomView actions state room messages composer =
 roomTitle :: forall action w. ViewActions action -> HeaderState -> RoomView -> HH.HTML w action
 roomTitle actions { notifications } room =
   HH.div [ css styles.headerGroup ] $
-    [ HH.span [ css $ styles.presence <> guard room.online styles.online, ARIA.hidden "true" ] []
+    [ HH.span [ css $ RoomStyle.presence (if room.online then Connected else Disconnected), ARIA.hidden "true" ] []
     , HH.h1 [ css styles.roomName ] [ HH.text "Room" ]
     , HH.code [ css styles.roomId, HP.title (Session.printRoomId room.session.id) ] [ HH.text $ shortId room.session.id ]
     , HH.span [ css styles.count, ARIA.role "status", ARIA.live "polite" ] [ HH.text $ onlineLabel room ]
@@ -91,7 +92,7 @@ roomPeople :: forall action w. ViewActions action -> HeaderState -> RoomView -> 
 roomPeople actions { author } room =
   HH.div [ css styles.headerGroup ]
     [ HH.div [ css styles.members, ARIA.role "group", ARIA.label $ "People online: " <> joinWith ", " room.members ] $
-        room.members # mapWithIndex \index -> avatar $ styles.member <> guard (index > 0) styles.overlap
+        room.members # mapWithIndex \index -> avatar $ RoomStyle.member (index > 0)
     , Button.button (quiet { styles = styles.identity }) [ HP.title "Change name", HE.onClick \_ -> actions.changeName ]
         [ avatar mempty author, HH.span_ [ HH.text author ] ]
     , Button.button quiet [ HE.onClick \_ -> actions.leave ] [ HH.text "Leave" ]
@@ -107,7 +108,7 @@ onlineLabel room
 typingLine :: forall action w. RoomView -> HH.HTML w action
 typingLine room =
   HH.div
-    [ css $ styles.typing <> guard (not $ Map.isEmpty room.typing) styles.typingVisible
+    [ css $ RoomStyle.typing (not $ Map.isEmpty room.typing)
     , ARIA.role "status"
     , ARIA.live "polite"
     , ARIA.atomic "true"

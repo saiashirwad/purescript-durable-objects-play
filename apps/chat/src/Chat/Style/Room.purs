@@ -1,5 +1,9 @@
 module Chat.Style.Room
   ( Styles
+  , Connection(..)
+  , member
+  , presence
+  , typing
   , raw
   , sheet
   , styles
@@ -11,6 +15,12 @@ import Chat.Style.Foundation (glass, gutters, hairline)
 import UI.Style (Sheet, Style, (:=), create, var)
 import UI.Style as Style
 import UI.Theme (tokens)
+
+data Connection
+  = Connected
+  | Disconnected
+
+derive instance eqConnection :: Eq Connection
 
 type Styles =
   { room :: Style
@@ -130,6 +140,21 @@ styles =
       , "inline-size" := "0.35rem"
       ]
   }
+
+presence :: Connection -> Style
+presence = case _ of
+  Connected -> styles.presence <> styles.online
+  Disconnected -> styles.presence
+
+member :: Boolean -> Style
+member = case _ of
+  true -> styles.member <> styles.overlap
+  false -> styles.member
+
+typing :: Boolean -> Style
+typing = case _ of
+  true -> styles.typing <> styles.typingVisible
+  false -> styles.typing
 
 sheet :: Sheet
 sheet = Style.atoms (Style.sheetFromRecord styles) <> Style.global raw
