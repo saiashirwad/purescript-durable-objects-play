@@ -8,12 +8,14 @@ package:
     - dom-indexed
     - effect
     - enums
+    - foreign-object
     - foldable-traversable
     - halogen
     - maybe
     - prelude
     - strings
     - tuples
+    - typelevel-prelude
     - unsafe-reference
     - web-dom
     - web-events

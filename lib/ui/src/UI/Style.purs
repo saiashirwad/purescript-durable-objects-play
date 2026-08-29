@@ -1,5 +1,6 @@
 module UI.Style
   ( Style
+  , Sheet
   , State(..)
   , Preference(..)
   , Var
@@ -16,6 +17,10 @@ module UI.Style
   , names
   , inlineVars
   , render
+  , atoms
+  , global
+  , renderSheet
+  , sheetFromRecord
   ) where
 
 import Prelude
@@ -27,10 +32,12 @@ import Data.Int (base36, floor, toNumber, toStringAs)
 import Data.Int.Bits (and, shl, xor, zshr)
 import Data.Number as Number
 import Data.String (joinWith)
+import Foreign.Object as Object
 import Data.String.CodeUnits (toCharArray)
 import Data.Tuple (Tuple(..))
 import Halogen.HTML as HH
 import Halogen.HTML.Properties as HP
+import Type.Row.Homogeneous (class Homogeneous)
 
 -- | An element state a declaration can wait for.
 data State
@@ -73,6 +80,34 @@ newtype Style = Style (Array Declaration)
 
 derive newtype instance Semigroup Style
 derive newtype instance Monoid Style
+
+-- | Atomic declarations and the few global rules they cannot express.
+newtype Sheet = Sheet
+  { atoms :: Array Style
+  , rules :: Array String
+  }
+
+instance semigroupSheet :: Semigroup Sheet where
+  append (Sheet left) (Sheet right) = Sheet
+    { atoms: left.atoms <> right.atoms
+    , rules: left.rules <> right.rules
+    }
+
+instance monoidSheet :: Monoid Sheet where
+  mempty = Sheet { atoms: [], rules: [] }
+
+atoms :: Array Style -> Sheet
+atoms values = Sheet { atoms: values, rules: [] }
+
+global :: String -> Sheet
+global value = Sheet { atoms: [], rules: [ value ] }
+
+renderSheet :: Sheet -> String
+renderSheet (Sheet sheet) = joinWith "\n" $ [ render sheet.atoms ] <> sheet.rules
+
+-- | All fields in a homogeneous style record, for feature-local sheets.
+sheetFromRecord :: forall row. Homogeneous row Style => { | row } -> Array Style
+sheetFromRecord = Object.values <<< Object.fromHomogeneous
 
 newtype Var = Var String
 

@@ -36,32 +36,42 @@ css :: String
 css = joinWith "\n"
   [ reset
   , Theme.render
-  , Style.render $ fold
-      [ Avatar.sheet
-      , Button.sheet
-      , Checkbox.sheet
-      , Dialog.sheet
-      , Disclosure.sheet
-      , Feedback.sheet
-      , Field.sheet
-      , Icon.sheet
-      , Input.sheet
-      , Lab.sheet
-      , Menu.sheet
-      , Popover.sheet
-      , RadioGroup.sheet
-      , Select.sheet
-      , Slider.sheet
-      , Status.sheet
-      , Surface.sheet
-      , Tabs.sheet
-      , Tooltip.sheet
-      ]
-  , Checkbox.raw
-  , Dialog.raw
-  , Feedback.raw
-  , Tooltip.raw
+  , Style.renderSheet components
   ]
+
+components :: Style.Sheet
+components =
+  Style.atoms
+    ( fold
+        [ Avatar.sheet
+        , Button.sheet
+        , Checkbox.sheet
+        , Dialog.sheet
+        , Disclosure.sheet
+        , Feedback.sheet
+        , Field.sheet
+        , Icon.sheet
+        , Input.sheet
+        , Lab.sheet
+        , Menu.sheet
+        , Popover.sheet
+        , RadioGroup.sheet
+        , Select.sheet
+        , Slider.sheet
+        , Status.sheet
+        , Surface.sheet
+        , Tabs.sheet
+        , Tooltip.sheet
+        ]
+    )
+    <> fold
+      ( Style.global <$>
+          [ Checkbox.raw
+          , Dialog.raw
+          , Feedback.raw
+          , Tooltip.raw
+          ]
+      )
 
 reset :: String
 reset = joinWith ""
