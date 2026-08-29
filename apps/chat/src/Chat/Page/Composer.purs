@@ -15,7 +15,7 @@ import Chat.Page.Icons (imageIcon, replyIcon, sendIcon)
 import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (App, ComposerAction(..), ComposerState, ComposerStatus(..), RoomToken, RoomView, modifyRoom, modifyRoomAt, withRoom)
 import Chat.Room (ImageId, Message, MessageId, assistantName, printAuthor, printImageId)
-import Chat.Style (styles)
+import Chat.Style.Composer (styles)
 import Control.Promise (Promise, toAffE)
 import Data.Array (filter, take)
 import Data.Array as Array

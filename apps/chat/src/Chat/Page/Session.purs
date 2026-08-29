@@ -16,7 +16,7 @@ import Chat.Page.Room as Room
 import Chat.Room (describeUserNameError, mkUserName, printUserName)
 import Chat.Page.Shared (blank)
 import Chat.Page.Types (App, Joining, Lobby, Locked, SessionAction(..), View(..))
-import Chat.Style (styles)
+import Chat.Style.Session (styles)
 import Control.Monad.Error.Class (catchError)
 import Data.Either (Either(..), either)
 import Data.Maybe (Maybe(..), fromMaybe, maybe)

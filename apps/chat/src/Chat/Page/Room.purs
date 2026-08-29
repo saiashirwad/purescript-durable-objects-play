@@ -17,7 +17,7 @@ import Chat.Page.Icons (bellIcon, linkIcon)
 import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (Action(..), App, ComposerStatus(..), RoomAction(..), RoomToken, RoomView, View(..), advanceRoomToken, modifyRoomAt, withRoom)
 import Chat.Room (Message, MessageId, RoomEvents, printAuthor, printMessageId)
-import Chat.Style (styles)
+import Chat.Style.Room (styles)
 import Cloudflare.Durable (Signal(..))
 import Data.Array (elem, length, mapWithIndex, replicate)
 import Data.Array as Array

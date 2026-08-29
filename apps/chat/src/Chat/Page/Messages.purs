@@ -15,7 +15,7 @@ import Chat.Page.Icons (replyIcon)
 import Chat.Page.Shared (avatar, quiet)
 import Chat.Room (Message, MessageId, isAssistant, printAuthor, printMessageId)
 import Chat.Session (RoomSession)
-import Chat.Style (styles)
+import Chat.Style.Message (styles)
 import Data.Array (elem, length, zip)
 import Data.Array as Array
 import Data.Foldable (fold, foldMap)
