@@ -61,7 +61,7 @@ render st =
     [ HH.h1_ [ HH.text "Counter" ]
     , HH.p [ HP.class_ (HH.ClassName "hint") ]
         [ HH.text "One Durable Object per name. The page calls it through "
-        , HH.code_ [ HH.text "Namespace \"Counter\" CounterApi" ]
+        , HH.code_ [ HH.text """Namespace "Counter" CounterApi""" ]
         , HH.text ", the same type the Worker uses."
         ]
     , Field.input

@@ -59,9 +59,9 @@ selector atoms cannot express (a sibling, a pseudo-element) also exports
 ## Commands
 
 ```sh
-spago build -p ui
-spago test -p ui
-spago bundle -p ui
+bun run build
+bun run test
+bun run bundle
 node apps/site/scripts/css.mjs
 ```
 

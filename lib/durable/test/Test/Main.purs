@@ -36,7 +36,7 @@ main = launchAff_ do
     _ <- Rpc.run $ account.corrupt unit
     result <- Rpc.run $ account.balance unit
     pure case result of
-      Left (PlatformError (Runtime.PlatformError { operation: "storage.get \"balance\"" })) -> true
+      Left (PlatformError (Runtime.PlatformError { operation: """storage.get "balance"""" })) -> true
       _ -> false
 
   timeline <- Simulator.clock

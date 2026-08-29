@@ -125,14 +125,35 @@ Simulator.advance clock (Milliseconds 1000.0)
 ```
 
 ```sh
+# The compile command is not in Alexandrite v0.0.19. Install this pinned revision.
+cargo install --git https://github.com/purefunctor/purescript-alexandrite.git \
+  --rev 741827da180fe9bad542096bb6592d5db4e65d04 --locked \
+  purescript-alexandrite --bin purescript-alexandrite
 bun install
 bun run dev       # chat at localhost:8787, counter at /counter.html, UI lab at /ui.html
+bun run watch     # keep output/ current after PureScript changes
 bun run check     # type-check the JS FFI files with their JSDoc
+bun run test      # same objects, in-memory simulator
 bun run test:e2e  # test pages in Chrome with axe
-spago test        # same objects, in-memory simulator
 ```
 
-Bun installs packages and runs the scripts; spago still runs tests and `spago run` under Node.
+Bun runs the project scripts. Spago resolves the workspace packages. The local
+`bin/purs` command sends each compile to Alexandrite. Spago still uses the standard
+`purs graph` command to find test and bundle entry points, and it runs tests under
+Node. Run `bun run watch` in a second terminal when you want Alexandrite to update
+`output/` after each PureScript change.
+
+## Neovim
+
+The `.alexandrite-lsp` marker makes the matching Neovim configuration start:
+
+```sh
+purescript-alexandrite lsp --stdio --diagnostics-on-change
+```
+
+Alexandrite reads the root `spago.lock`, so it indexes all local packages and
+their dependencies. Use `:LspInfo` in a PureScript buffer to confirm that the
+`alexandrite` client is attached. `purs-tidy` still formats PureScript files.
 
 Libraries are in `lib/`; applications are in `apps/`.
 

@@ -13,6 +13,7 @@ module UI.Theme
 import Prelude
 
 import Data.String (joinWith)
+import Data.String.CodeUnits as CodeUnits
 import Data.Tuple (Tuple(..))
 import Data.Tuple.Nested ((/\))
 import Halogen.HTML as HH
@@ -183,7 +184,7 @@ scope :: forall r i. Theme -> Style -> HH.IProp (class :: String | r) i
 scope theme style = HP.classes $ [ HH.ClassName $ themeClass theme.name ] <> Style.classes style
 
 render :: String
-render = joinWith "\n"
+render = joinWith (CodeUnits.singleton '\n')
   [ themeRule light
   , themeRule dark
   , themeRule highContrast

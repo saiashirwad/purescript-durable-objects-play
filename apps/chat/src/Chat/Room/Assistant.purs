@@ -31,6 +31,7 @@ import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Newtype (unwrap)
 import Data.Op (Op(..))
 import Data.String (joinWith, toLower)
+import Data.String.CodeUnits as CodeUnits
 import Data.Time.Duration (Milliseconds(..))
 import Data.Variant (Variant)
 import Markdown as Markdown
@@ -148,7 +149,7 @@ answer assistant@(Assistant a) = do
       Right text -> complete assistant job text
       Left failure -> failOrRetry assistant job failure
   where
-  recap = joinWith "\n" <<< map \message -> printAuthor message.author <> ": " <> message.text
+  recap = joinWith (CodeUnits.singleton '\n') <<< map \message -> printAuthor message.author <> ": " <> message.text
 
 complete :: Assistant -> Job -> String -> Runtime Unit
 complete assistant@(Assistant a) job text = do

@@ -207,7 +207,19 @@ fixtureAuthor name = case mkAuthor name of
   Left _ -> Assistant
 
 markdownSample :: String
-markdownSample = "# Launch notes\n\nHello @Ada and @ai. This has **bold text**, *italic text*, and `inline code`. Read the [room guide](https://example.com/chat).\n\n- Keep the link private\n- Reply in context\n\n> Ship the smallest clear change.\n\n```purescript\nmain = pure unit\n```"
+markdownSample =
+  """# Launch notes
+
+Hello @Ada and @ai. This has **bold text**, *italic text*, and `inline code`. Read the [room guide](https://example.com/chat).
+
+- Keep the link private
+- Reply in context
+
+> Ship the smallest clear change.
+
+```purescript
+main = pure unit
+```"""
 
 parseFixture :: String -> Fixture
 parseFixture = case _ of
