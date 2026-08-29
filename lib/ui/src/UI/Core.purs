@@ -58,15 +58,14 @@ dataAttr name = HP.attr $ HH.AttrName $ "data-" <> name
 nextEnabled :: forall r. Int -> Array { disabled :: Boolean | r } -> Int -> Int
 nextEnabled direction items current
   | Array.null items = 0
-  | otherwise = go 1 $ wrap (current + direction)
+  | otherwise = go count $ wrap (current + direction)
       where
       count = Array.length items
       wrap value = ((value `mod` count) + count) `mod` count
-      go seen candidate
-        | seen > count = current
-        | otherwise = case Array.index items candidate of
-            Just item | not item.disabled -> candidate
-            _ -> go (seen + 1) $ wrap (candidate + direction)
+      go 0 _ = current
+      go remaining candidate = case Array.index items candidate of
+        Just item | not item.disabled -> candidate
+        _ -> go (remaining - 1) $ wrap (candidate + direction)
 
 firstEnabled :: forall r. Array { disabled :: Boolean | r } -> Int
 firstEnabled = fromMaybe 0 <<< Array.findIndex (not <<< _.disabled)

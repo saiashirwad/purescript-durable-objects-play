@@ -6,7 +6,7 @@ module UI.RadioGroup
 
 import Prelude
 
-import Data.Foldable (fold, foldMap)
+import Data.Foldable (foldMap)
 import Data.Maybe (Maybe)
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
@@ -27,22 +27,23 @@ type Options action =
 
 -- | Native radios in a fieldset; arrow keys come for free.
 radioGroup :: forall w action. Options action -> Array Choice -> HH.HTML w action
-radioGroup options choices = HH.fieldset [ css root, HP.id options.id ] $ fold
-  [ [ HH.legend [ css legend ] [ HH.text options.label ] ]
-  , foldMap (\text -> [ HH.p [ css description ] [ HH.text text ] ]) options.description
-  , choices <#> \choice -> HH.label [ css option ]
-      [ HH.input
-          [ css radio
-          , HP.type_ HP.InputRadio
-          , HP.name options.name
-          , HP.value choice.value
-          , HP.checked $ choice.value == options.value
-          , HP.disabled choice.disabled
-          , HE.onClick \_ -> options.onChange choice.value
+radioGroup options choices = HH.fieldset [ css root, HP.id options.id ] $
+  [ HH.legend [ css legend ] [ HH.text options.label ] ]
+    <> foldMap (\text -> [ HH.p [ css description ] [ HH.text text ] ]) options.description
+    <>
+      ( choices <#> \choice -> HH.label [ css option ]
+          [ HH.input
+              [ css radio
+              , HP.type_ HP.InputRadio
+              , HP.name options.name
+              , HP.value choice.value
+              , HP.checked $ choice.value == options.value
+              , HP.disabled choice.disabled
+              , HE.onClick \_ -> options.onChange choice.value
+              ]
+          , HH.span_ [ HH.text choice.label ]
           ]
-      , HH.span_ [ HH.text choice.label ]
-      ]
-  ]
+      )
 
 root :: Style
 root = create

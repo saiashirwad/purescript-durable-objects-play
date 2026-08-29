@@ -6,6 +6,7 @@ module UI.Slider
 
 import Prelude
 
+import DOM.HTML.Indexed.StepValue (StepValue(..))
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
@@ -39,9 +40,9 @@ slider options =
         , HP.type_ HP.InputRange
         , HP.value $ show options.value
         , HP.disabled options.disabled
-        , HP.attr (HH.AttrName "min") $ show options.minimum
-        , HP.attr (HH.AttrName "max") $ show options.maximum
-        , HP.attr (HH.AttrName "step") $ show options.step
+        , HP.min options.minimum
+        , HP.max options.maximum
+        , HP.step (Step options.step)
         , ARIA.valueMin $ show options.minimum
         , ARIA.valueMax $ show options.maximum
         , ARIA.valueNow $ show options.value

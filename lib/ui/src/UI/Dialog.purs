@@ -10,8 +10,8 @@ import Prelude
 
 import Data.Bifunctor (bimap)
 import Data.Foldable (foldMap)
-import Data.Traversable (traverse)
 import Data.Maybe (Maybe(..))
+import Data.Traversable (traverse)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (liftEffect)
 import Halogen as H

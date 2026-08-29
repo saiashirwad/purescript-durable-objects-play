@@ -13,6 +13,7 @@ module UI.Style
   , varName
   , css
   , classes
+  , names
   , inlineVars
   , render
   ) where
@@ -141,7 +142,12 @@ css :: forall r i. Style -> HH.IProp (class :: String | r) i
 css = HP.classes <<< classes
 
 classes :: Style -> Array HH.ClassName
-classes (Style declarations) = HH.ClassName <<< className <$> resolve declarations
+classes = map HH.ClassName <<< names
+
+-- | Class names as plain strings, for elements whose `class` is an attribute
+-- | because their `className` property is read-only (SVG).
+names :: Style -> Array String
+names (Style declarations) = className <$> resolve declarations
 
 inlineVars :: forall r i. Array (Tuple Var String) -> HH.IProp (style :: String | r) i
 inlineVars values = HP.style $ joinWith ";" $ values <#> \(Tuple (Var name) value) -> name <> ":" <> value

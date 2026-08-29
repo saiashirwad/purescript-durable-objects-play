@@ -13,7 +13,7 @@ import Prelude
 
 import DOM.HTML.Indexed as I
 import Data.Array as Array
-import Data.Foldable (fold, foldMap)
+import Data.Foldable (foldMap)
 import Data.Maybe (Maybe(..), isJust)
 import Data.Monoid (guard)
 import Data.String (joinWith)
@@ -74,14 +74,13 @@ textarea options properties = field options $ HH.textarea $
 
 -- | A label, the control, then its description and error, all connected.
 field :: forall w i. Options -> HH.HTML w i -> HH.HTML w i
-field options control = HH.div [ css root, dataAttr "ui" "field" ] $ fold
-  [ [ HH.label [ css labelStyle, HP.for options.id ] $
-        [ HH.text options.label ] <> guard options.required [ HH.span [ ARIA.hidden "true" ] [ HH.text " *" ] ]
-    ]
-  , [ control ]
-  , foldMap (\text -> [ HH.p [ css help, HP.id $ helpId options ] [ HH.text text ] ]) options.description
-  , foldMap (\text -> [ HH.p [ css errorStyle, HP.id $ errorId options, ARIA.role "alert" ] [ HH.text text ] ]) options.error
+field options control = HH.div [ css root, dataAttr "ui" "field" ] $
+  [ HH.label [ css labelStyle, HP.for options.id ] $
+      [ HH.text options.label ] <> guard options.required [ HH.span [ ARIA.hidden "true" ] [ HH.text " *" ] ]
+  , control
   ]
+    <> foldMap (\text -> [ HH.p [ css help, HP.id $ helpId options ] [ HH.text text ] ]) options.description
+    <> foldMap (\text -> [ HH.p [ css errorStyle, HP.id $ errorId options, ARIA.role "alert" ] [ HH.text text ] ]) options.error
 
 describedBy :: forall r i. Options -> HH.IProp r i
 describedBy options = ARIA.describedBy $ joinWith " " $ Array.catMaybes

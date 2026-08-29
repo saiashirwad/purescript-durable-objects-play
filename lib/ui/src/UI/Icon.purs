@@ -8,14 +8,13 @@ module UI.Icon
 
 import Prelude
 
+import Data.String (joinWith)
 import Halogen.HTML as HH
 import Halogen.HTML.Properties as HP
-import Data.String (joinWith)
 import UI.Style (Style, (:=), create)
 import UI.Style as Style
 
--- | Paths on a 24×24 grid, stroked in the current color. The class goes on
--- | as an attribute: an SVG element's `className` property is read-only.
+-- | Paths on a 24×24 grid, stroked in the current color.
 newtype Icon = Icon (Array String)
 
 icon :: Array String -> Icon
@@ -26,7 +25,7 @@ render = styled mempty
 
 styled :: forall w i. Style -> Icon -> HH.HTML w i
 styled style (Icon paths) = svg "svg"
-  [ attr "class" $ joinWith " " $ Style.classes (base <> style) <#> \(HH.ClassName name) -> name
+  [ attr "class" $ joinWith " " $ Style.names (base <> style)
   , attr "viewBox" "0 0 24 24"
   , attr "aria-hidden" "true"
   , attr "focusable" "false"
