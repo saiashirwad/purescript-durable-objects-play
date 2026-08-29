@@ -24,7 +24,7 @@ import Prelude
 
 import Chat.Client (RoomId)
 import Chat.Page.Browser (NotificationPermission, TimeFormatter)
-import Chat.Room (Message, RoomApi, RoomEvents)
+import Chat.Room (ImageId, Message, MessageId, RoomApi, RoomEvents)
 import Cloudflare.Durable (Signal)
 import Data.Map (Map)
 import Data.Maybe (Maybe)
@@ -64,8 +64,8 @@ derive instance Eq ComposerStatus
 
 type ComposerState =
   { draft :: String
-  , replyTo :: Maybe Int
-  , attachments :: Array Int
+  , replyTo :: Maybe MessageId
+  , attachments :: Array ImageId
   , status :: ComposerStatus
   }
 
@@ -81,7 +81,7 @@ type RoomView =
   , api :: Record RoomApi
   , shareUrl :: String
   , composer :: ComposerState
-  , messages :: Map Int Message
+  , messages :: Map MessageId Message
   , feed :: H.SubscriptionId
   , ticker :: H.SubscriptionId
   , online :: Boolean
@@ -111,8 +111,8 @@ data SessionAction
 data RoomAction
   = CopyLink
   | Leave
-  | JumpTo Int
-  | React Int String
+  | JumpTo MessageId
+  | React MessageId String
   | Tick RoomToken
   | Notified RoomToken (Signal (Variant RoomEvents))
 
@@ -123,8 +123,8 @@ data ComposerAction
   | PickMention String
   | Attach
   | SelectedFiles (Array File)
-  | Detach Int
-  | Reply (Maybe Int)
+  | Detach ImageId
+  | Reply (Maybe MessageId)
   | Submit Event
 
 type App m = H.HalogenM State Action () Void m

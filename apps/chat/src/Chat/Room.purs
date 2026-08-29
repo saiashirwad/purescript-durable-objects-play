@@ -1,5 +1,6 @@
 module Chat.Room
-  ( Message
+  ( AcceptedMessage
+  , Message
   , NewMessage
   , PostError(..)
   , ReactError(..)
@@ -19,8 +20,8 @@ import Prelude
 import Cloudflare.Durable (Object)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Codec (class HasCodec)
-import Chat.Room.Domain (UserNameError(..), describeUserNameError)
-import Chat.Room.Domain (UserName, UserNameError(..), assistantName, describeUserNameError, maxUserNameLength, mkUserName, printUserName) as Domain
+import Chat.Room.Domain (Author, ImageId, MessageId, UserNameError(..), describeUserNameError, mkImageId, mkMessageId, printImageId, printMessageId)
+import Chat.Room.Domain (Author(..), ImageId(..), MessageId(..), UserName, UserNameError(..), assistantName, describeUserNameError, isAssistant, maxUserNameLength, mkAuthor, mkImageId, mkMessageId, mkUserName, printAuthor, printImageId, printMessageId, printUserName) as Domain
 import Cloudflare.Durable.Rpc (NoError, Rpc, method)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
@@ -34,17 +35,18 @@ type Reaction = { emoji :: String, by :: Array String }
 -- | `text` is Markdown. `images` are ids served by the room at `/image/<id>`.
 -- | `mentions` are the `@names` the server found in the text.
 type Message =
-  { id :: Int
-  , author :: String
+  { id :: MessageId
+  , author :: Author
   , text :: String
-  , images :: Array Int
-  , replyTo :: Maybe Int
+  , images :: Array ImageId
+  , replyTo :: Maybe MessageId
   , mentions :: Array String
   , reactions :: Array Reaction
   , sentAt :: Number
   }
 
-type NewMessage = { author :: String, text :: String, images :: Array Int, replyTo :: Maybe Int }
+type NewMessage = { author :: String, text :: String, images :: Array ImageId, replyTo :: Maybe MessageId }
+type AcceptedMessage = { author :: Author, text :: String, images :: Array ImageId, replyTo :: Maybe MessageId }
 type Snapshot = { messages :: Array Message, presence :: Array String }
 
 data PostError
@@ -54,8 +56,8 @@ data PostError
   | AuthorInvalid
   | AuthorReserved
   | TextTooLong
-  | NoSuchReply Int
-  | NoSuchImage Int
+  | NoSuchReply MessageId
+  | NoSuchImage ImageId
 
 derive instance eqPostError :: Eq PostError
 
@@ -94,8 +96,8 @@ instance hasCodecPostError :: HasCodec PostError where
       AuthorReserved -> "AuthorReserved" /\ Nothing
       TextRequired -> "TextRequired" /\ Nothing
       TextTooLong -> "TextTooLong" /\ Nothing
-      NoSuchReply id -> "NoSuchReply" /\ Just id
-      NoSuchImage id -> "NoSuchImage" /\ Just id
+      NoSuchReply id -> "NoSuchReply" /\ Just (printMessageId id)
+      NoSuchImage id -> "NoSuchImage" /\ Just (printImageId id)
     read = case _ of
       "AuthorRequired" /\ Nothing -> Just AuthorRequired
       "TextRequired" /\ Nothing -> Just TextRequired
@@ -103,11 +105,11 @@ instance hasCodecPostError :: HasCodec PostError where
       "AuthorInvalid" /\ Nothing -> Just AuthorInvalid
       "AuthorReserved" /\ Nothing -> Just AuthorReserved
       "TextTooLong" /\ Nothing -> Just TextTooLong
-      "NoSuchReply" /\ Just id -> Just (NoSuchReply id)
-      "NoSuchImage" /\ Just id -> Just (NoSuchImage id)
+      "NoSuchReply" /\ Just id -> NoSuchReply <$> mkMessageId id
+      "NoSuchImage" /\ Just id -> NoSuchImage <$> mkImageId id
       _ -> Nothing
 
-data ReactError = NoSuchMessage Int | EmojiRequired | ReactorRequired | ReactorTooLong | ReactorInvalid | ReactorReserved
+data ReactError = NoSuchMessage MessageId | EmojiRequired | ReactorRequired | ReactorTooLong | ReactorInvalid | ReactorReserved
 
 derive instance eqReactError :: Eq ReactError
 
@@ -133,14 +135,14 @@ instance hasCodecReactError :: HasCodec ReactError where
   codec = tagged "ReactError" print read
     where
     print = case _ of
-      NoSuchMessage id -> "NoSuchMessage" /\ Just id
+      NoSuchMessage id -> "NoSuchMessage" /\ Just (printMessageId id)
       EmojiRequired -> "EmojiRequired" /\ Nothing
       ReactorRequired -> "ReactorRequired" /\ Nothing
       ReactorTooLong -> "ReactorTooLong" /\ Nothing
       ReactorInvalid -> "ReactorInvalid" /\ Nothing
       ReactorReserved -> "ReactorReserved" /\ Nothing
     read = case _ of
-      "NoSuchMessage" /\ Just id -> Just (NoSuchMessage id)
+      "NoSuchMessage" /\ Just id -> NoSuchMessage <$> mkMessageId id
       "EmojiRequired" /\ Nothing -> Just EmojiRequired
       "ReactorRequired" /\ Nothing -> Just ReactorRequired
       "ReactorTooLong" /\ Nothing -> Just ReactorTooLong
@@ -160,7 +162,7 @@ maxTextLength = 4000
 
 type RoomApi =
   ( post :: NewMessage -> Rpc PostError Message
-  , react :: { id :: Int, emoji :: String, by :: String } -> Rpc ReactError Message
+  , react :: { id :: MessageId, emoji :: String, by :: String } -> Rpc ReactError Message
   , snapshot :: Unit -> Rpc NoError Snapshot
   , typing :: String -> Rpc NoError Unit
   )

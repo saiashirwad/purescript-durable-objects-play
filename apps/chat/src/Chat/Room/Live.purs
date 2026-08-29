@@ -9,25 +9,23 @@ import Ai (Model)
 import Ai.Catalogue as Catalogue
 import Ai.Exa as Exa
 import Ai.Provider as Provider
-import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, Snapshot, UserNameError(..), maxTextLength, mkUserName, printUserName, room)
+import Chat.Room (Message, RoomApi, RoomEvents, Snapshot, room)
 import Chat.Room.Assistant as Assistant
 import Chat.Room.Images as Images
+import Chat.Room.Messages as Messages
+import Chat.Room.Presence as Presence
 import Chat.Room.Store as Store
 import Cloudflare.Durable (Handlers, Init, Live, Runtime)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Alarm as Alarm
-import Cloudflare.Durable.Rpc (Rpc, fail)
-import Cloudflare.Durable.Runtime (class MonadRuntime, liftRuntime)
+import Cloudflare.Durable.Rpc (Rpc)
+import Cloudflare.Durable.Runtime (liftRuntime)
 import Cloudflare.Durable.Sockets (Sockets)
 import Cloudflare.Durable.Sockets as Sockets
-import Data.Array (null, nub)
 import Data.DateTime.Instant (unInstant)
-import Data.Either (Either(..))
 import Data.Foldable (for_)
 import Data.Functor.Contravariant (cmap)
-import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap)
-import Data.String (length, trim)
 import Data.Variant (Variant, inj)
 import Effect.Aff (Aff)
 import Type.Proxy (Proxy(..))
@@ -38,8 +36,10 @@ import Type.Proxy (Proxy(..))
 type Room =
   { store :: Store.Store
   , images :: Images.Images
-  , emit :: Channels
   , assistant :: Assistant.Assistant
+  , messages :: Messages.Messages
+  , presence :: Presence.Presence
+  , typing :: Sockets String
   }
 
 -- | The socket, narrowed to each event: `cmap` on a `Contravariant`.
@@ -92,81 +92,34 @@ open modelFor = ado
         , model: modelFor <$> apiKey
         , search: Exa.search <$> exaKey
         }
+      let
+        messages = Messages.open
+          { store
+          , images
+          , assistant
+          , message: emit.message
+          , updated: emit.updated
+          }
+        presence = Presence.open emit.all emit.presence
       Images.cleanup images
-      pure { store, images, emit, assistant }
+      pure { store, images, assistant, messages, presence, typing: emit.typing }
 
 handlersFor :: Room -> Handlers RoomApi
 handlersFor r =
   Durable.handlers
-    { post: post r
-    , react: react r
+    { post: Messages.post r.messages
+    , react: Messages.react r.messages
     , snapshot: snapshot r
-    , typing: Sockets.broadcast r.emit.typing
+    , typing: Sockets.broadcast r.typing
     }
     `Durable.withHooks`
       ( Assistant.hooks r.assistant
           <> Images.hooks r.images
-          <> Durable.connectHook (const $ broadcastPresence r)
-          <> Durable.disconnectHook (const $ broadcastPresence r)
+          <> Presence.hooks r.presence
       )
-
--- Messages ----------------------------------------------------------------------
-
-members :: forall m. MonadRuntime m => Room -> m (Array String)
-members r = nub <<< map _.tag <$> Sockets.connected r.emit.all
-
--- | Store one message and broadcast it after every write succeeds.
-record :: Room -> NewMessage -> Runtime Message
-record r new = do
-  message <- Assistant.post r.assistant new
-  Images.attach r.images message.sentAt new.images
-  Sockets.broadcast r.emit.message message
-  pure message
 
 snapshot :: Room -> Unit -> Rpc Void Snapshot
 snapshot r _ = do
   messages <- liftRuntime $ Store.snapshot r.store
-  presence <- members r
+  presence <- Presence.members r.presence
   pure { messages, presence }
-
-broadcastPresence :: Room -> Runtime Unit
-broadcastPresence r = members r >>= Sockets.broadcast r.emit.presence
-
--- | Validate, record, and queue a reply if the assistant was mentioned.
-post :: Room -> NewMessage -> Rpc PostError Message
-post r new = do
-  let body = trim new.text
-  user <- case mkUserName new.author of
-    Left UserNameRequired -> fail AuthorRequired
-    Left UserNameTooLong -> fail AuthorTooLong
-    Left UserNameInvalid -> fail AuthorInvalid
-    Left UserNameReserved -> fail AuthorReserved
-    Right accepted -> pure accepted
-  let author = printUserName user
-  when (body == "" && null new.images) $ fail TextRequired
-  when (length body > maxTextLength) $ fail TextTooLong
-  for_ new.replyTo \id -> do
-    found <- liftRuntime $ Store.hasMessage r.store id
-    unless found $ fail $ NoSuchReply id
-  for_ new.images \id -> do
-    found <- liftRuntime $ Images.exists r.images id
-    unless found $ fail $ NoSuchImage id
-  liftRuntime $ record r new { author = author, text = body }
-
-react :: Room -> { id :: Int, emoji :: String, by :: String } -> Rpc ReactError Message
-react r { id, emoji, by } = do
-  let normalizedEmoji = trim emoji
-  when (normalizedEmoji == "") $ fail EmojiRequired
-  reactor <- case mkUserName by of
-    Left UserNameRequired -> fail ReactorRequired
-    Left UserNameTooLong -> fail ReactorTooLong
-    Left UserNameInvalid -> fail ReactorInvalid
-    Left UserNameReserved -> fail ReactorReserved
-    Right accepted -> pure accepted
-  let normalizedReactor = printUserName reactor
-  liftRuntime (Store.react r.store { id, emoji: normalizedEmoji, by: normalizedReactor }) >>= case _ of
-    Nothing -> fail $ NoSuchMessage id
-    Just message -> do
-      liftRuntime $ Sockets.broadcast r.emit.updated message
-      pure message
-

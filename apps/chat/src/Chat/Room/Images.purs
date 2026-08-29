@@ -13,9 +13,11 @@ module Chat.Room.Images
 
 import Prelude
 
+import Chat.Room.Domain (ImageId(..), mkImageId, printImageId)
 import Cloudflare.Durable (Hooks, Runtime, State)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Alarm as Alarm
+import Cloudflare.Durable.Codec (codec)
 import Cloudflare.Durable.Sql (Statement)
 import Cloudflare.Durable.Sql as Sql
 import Cloudflare.Worker as Worker
@@ -88,12 +90,12 @@ open state = do
 hooks :: Images -> Hooks
 hooks images = Durable.fetchHook (serve images) <> Durable.alarmHook (cleanup images)
 
-exists :: Images -> Int -> Runtime Boolean
+exists :: Images -> ImageId -> Runtime Boolean
 exists (Images state) id = Sql.first state imageExists id <#> case _ of
   Just _ -> true
   Nothing -> false
 
-attach :: Images -> Number -> Array Int -> Runtime Unit
+attach :: Images -> Number -> Array ImageId -> Runtime Unit
 attach (Images state) attachedAt = traverse_ $ Sql.execute state attachImage <<< { id: _, attachedAt }
 
 cleanup :: Images -> Runtime Unit
@@ -118,8 +120,8 @@ serve images@(Images state) request = case Worker.method request, Worker.pathnam
           Nothing -> pure $ Just $ Worker.text 500 "could not store image"
           Just id -> do
             scheduleEarlier images (uploadedAt + abandonedTtlMs)
-            pure $ Just $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: CA.int }) { id }
-  "GET", path | Just id <- stripPrefix (Pattern "/image/") path >>= fromString ->
+            pure $ Just $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: codec }) { id }
+  "GET", path | Just id <- stripPrefix (Pattern "/image/") path >>= fromString >>= mkImageId ->
     Sql.first state selectImage id <#> case _ of
       Just image -> Just $ Worker.bytes 200 image.mime image.data
       Nothing -> Just $ Worker.text 404 "no such image"
@@ -175,23 +177,23 @@ dropImages = Sql.statement "DROP TABLE images" Sql.noParams (pure unit)
 renameImages :: Statement Unit Unit
 renameImages = Sql.statement "ALTER TABLE images_next RENAME TO images" Sql.noParams (pure unit)
 
-insertImage :: Statement { mime :: String, data :: String, uploadedAt :: Number } Int
+insertImage :: Statement { mime :: String, data :: String, uploadedAt :: Number } ImageId
 insertImage = lcmap (\i -> (i.mime /\ i.data) /\ i.uploadedAt) $ Sql.statement
   "INSERT INTO images (mime, data, uploaded_at) VALUES (?, ?, ?) RETURNING id"
   (Sql.param CA.string `divided` Sql.param CA.string `divided` Sql.param CA.number)
-  (Sql.columnOf "id")
+  (ImageId <$> Sql.columnOf "id")
 
-selectImage :: Statement Int { mime :: String, data :: String }
+selectImage :: Statement ImageId { mime :: String, data :: String }
 selectImage = Sql.statement
   "SELECT mime, data FROM images WHERE id = ?"
   Sql.paramOf
   ({ mime: _, data: _ } <$> Sql.columnOf "mime" <*> Sql.columnOf "data")
 
-imageExists :: Statement Int Int
+imageExists :: Statement ImageId Int
 imageExists = Sql.statement "SELECT id FROM images WHERE id = ?" Sql.paramOf (Sql.columnOf "id")
 
-attachImage :: Statement { id :: Int, attachedAt :: Number } Unit
-attachImage = lcmap (\i -> i.attachedAt /\ i.id) $ Sql.statement
+attachImage :: Statement { id :: ImageId, attachedAt :: Number } Unit
+attachImage = lcmap (\i -> i.attachedAt /\ printImageId i.id) $ Sql.statement
   "UPDATE images SET attached_at = ? WHERE id = ?"
   (Sql.param CA.number `divided` Sql.param CA.int)
   (pure unit)

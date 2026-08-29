@@ -11,11 +11,12 @@ import Ai (Agent, Def, Model, invoke, mount, text, tool)
 import Ai.Exa as Exa
 import Ai.Model as Model
 import Ai.Schema as Schema
-import Chat.Room (Message, NewMessage, RoomEvents, assistantName)
+import Chat.Room (AcceptedMessage, Message, MessageId, RoomEvents, assistantName, isAssistant, mkMessageId, printAuthor)
 import Chat.Room.Store as Store
 import Cloudflare.Durable (Hooks, Runtime, State)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Alarm as Alarm
+import Cloudflare.Durable.Codec (codec)
 import Cloudflare.Durable.Sockets (Sockets)
 import Cloudflare.Durable.Sockets as Sockets
 import Cloudflare.Durable.Sql (Command, Statement)
@@ -58,7 +59,7 @@ type Config =
   , search :: Maybe Exa.Search
   }
 
-type Job = { trigger :: Int, attempts :: Int }
+type Job = { trigger :: MessageId, attempts :: Int }
 
 data FailureKind
   = ConfigurationFailure
@@ -90,16 +91,16 @@ open config = do
 hooks :: Assistant -> Hooks
 hooks assistant = Durable.alarmHook $ answer assistant
 
-post :: Assistant -> NewMessage -> Runtime Message
+post :: Assistant -> AcceptedMessage -> Runtime Message
 post assistant@(Assistant a) message = do
   let requested = isRequested message
   stored <- if requested then Store.postWith a.store enqueueCommands message else Store.post a.store message
   when requested $ wake assistant
   pure stored
 
-isRequested :: NewMessage -> Boolean
+isRequested :: AcceptedMessage -> Boolean
 isRequested message =
-  toLower message.author /= toLower assistantName
+  not (isAssistant message.author)
     && any (\mention -> toLower mention == toLower assistantName) (Markdown.mentions message.text)
 
 enqueueCommands :: Array Command
@@ -113,7 +114,7 @@ migratePending (Assistant a) = do
   pending <- Storage.get a.state pendingKey >>= case _ of
     Just trigger -> pure $ Just trigger
     Nothing -> last <<< fromMaybe [] <$> Storage.get a.state legacyPendingKey
-  for_ pending \trigger -> do
+  for_ (pending >>= mkMessageId) \trigger -> do
     exists <- Store.hasMessage a.store trigger
     when exists do
       updatedAt <- unwrap <<< unInstant <$> Alarm.now a.state
@@ -147,7 +148,7 @@ answer assistant@(Assistant a) = do
       Right text -> complete assistant job text
       Left failure -> failOrRetry assistant job failure
   where
-  recap = joinWith "\n" <<< map \message -> message.author <> ": " <> message.text
+  recap = joinWith "\n" <<< map \message -> printAuthor message.author <> ": " <> message.text
 
 complete :: Assistant -> Job -> String -> Runtime Unit
 complete assistant@(Assistant a) job text = do
@@ -244,31 +245,31 @@ insertPending = Sql.statement
   Sql.noParams
   (pure unit)
 
-insertLegacyPending :: Statement { trigger :: Int, updatedAt :: Number } Unit
+insertLegacyPending :: Statement { trigger :: MessageId, updatedAt :: Number } Unit
 insertLegacyPending = Sql.statement
   "INSERT OR IGNORE INTO assistant_jobs (trigger, status, attempts, updated_at) VALUES (?, 'pending', 0, ?)"
-  (Op \job -> [ CA.encode CA.int job.trigger, CA.encode CA.number job.updatedAt ])
+  (Op \job -> [ CA.encode codec job.trigger, CA.encode CA.number job.updatedAt ])
   (pure unit)
 
-selectActive :: Statement Unit Int
+selectActive :: Statement Unit MessageId
 selectActive = Sql.statement
   "SELECT trigger FROM assistant_jobs WHERE status IN ('pending', 'running') ORDER BY trigger DESC LIMIT 1"
   Sql.noParams
-  (Sql.columnOf "trigger")
+  (Sql.column "trigger" codec)
 
 claimJob :: Statement Number Job
 claimJob = Sql.statement
   "UPDATE assistant_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE trigger = COALESCE((SELECT trigger FROM assistant_jobs WHERE status = 'running' ORDER BY trigger DESC LIMIT 1), (SELECT trigger FROM assistant_jobs WHERE status = 'pending' ORDER BY trigger DESC LIMIT 1)) RETURNING trigger, attempts"
   (Sql.param CA.number)
-  ({ trigger: _, attempts: _ } <$> Sql.columnOf "trigger" <*> Sql.columnOf "attempts")
+  ({ trigger: _, attempts: _ } <$> Sql.column "trigger" codec <*> Sql.columnOf "attempts")
 
-retryJob :: Statement { trigger :: Int, failure :: String, updatedAt :: Number } Unit
+retryJob :: Statement { trigger :: MessageId, failure :: String, updatedAt :: Number } Unit
 retryJob = Sql.statement
   "UPDATE assistant_jobs SET status = 'pending', failure = ?, updated_at = ? WHERE trigger = ? AND status = 'running'"
   ( Op \job ->
       [ CA.encode CA.string job.failure
       , CA.encode CA.number job.updatedAt
-      , CA.encode CA.int job.trigger
+      , CA.encode codec job.trigger
       ]
   )
   (pure unit)

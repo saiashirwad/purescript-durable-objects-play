@@ -5,17 +5,20 @@ module Chat.Room.Migrations
 
 import Prelude
 
-import Chat.Room (Message, Reaction, assistantName)
+import Chat.Room (ImageId, Message, MessageId, Reaction, isAssistant, mkAuthor, mkMessageId, printAuthor)
 import Cloudflare.Durable (Runtime, State)
+import Cloudflare.Durable.Codec (codec)
 import Cloudflare.Durable.Sql (Command, Statement)
 import Cloudflare.Durable.Sql as Sql
+import Cloudflare.Durable.Runtime (platformError)
 import Cloudflare.Durable.Storage as Storage
 import Data.Array (any, concatMap, mapWithIndex, null)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Compat as Compat
+import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.Op (Op(..))
-import Data.String (toLower)
+import Data.Traversable (traverse)
 import Markdown as Markdown
 
 type LegacyMessage =
@@ -48,7 +51,10 @@ initialize state = do
   else Storage.get state messagesKey >>= case _ of
     Just messages -> importMessages state messages *> deleteLegacyKeys state
     Nothing -> Storage.get state legacyKey >>= case _ of
-      Just legacy -> importMessages state (upgrade <$> legacy) *> deleteLegacyKeys state
+      Just legacy -> do
+        messages <- traverse upgrade legacy
+        importMessages state messages
+        deleteLegacyKeys state
       Nothing -> pure unit
 
 importMessages :: State -> Array Message -> Runtime Unit
@@ -62,21 +68,24 @@ messageCommands message =
     <> mapWithIndex (\position imageId -> Sql.command insertImageLink { messageId: message.id, imageId, position }) message.images
     <> concatMap (reactionCommands message.id) message.reactions
 
-reactionCommands :: Int -> Reaction -> Array Command
+reactionCommands :: MessageId -> Reaction -> Array Command
 reactionCommands messageId reaction = reaction.by <#> \reactor ->
   Sql.command insertReaction { messageId, emoji: reaction.emoji, reactor }
 
-upgrade :: LegacyMessage -> Message
-upgrade message =
-  { id: message.id
-  , author: message.author
-  , text: message.text
-  , images: []
-  , replyTo: Nothing
-  , mentions: Markdown.mentions message.text
-  , reactions: []
-  , sentAt: message.sentAt
-  }
+upgrade :: LegacyMessage -> Runtime Message
+upgrade message = case mkMessageId message.id, mkAuthor message.author of
+  Just id, Right author -> pure
+    { id
+    , author
+    , text: message.text
+    , images: []
+    , replyTo: Nothing
+    , mentions: Markdown.mentions message.text
+    , reactions: []
+    , sentAt: message.sentAt
+    }
+  Nothing, _ -> platformError "room migration" $ "invalid legacy message id " <> show message.id
+  _, Left why -> platformError "room migration" $ "invalid legacy author: " <> show why
 
 deleteLegacyKeys :: State -> Runtime Unit
 deleteLegacyKeys state = do
@@ -144,24 +153,24 @@ insertMessage :: Statement Message Unit
 insertMessage = Sql.statement
   "INSERT OR IGNORE INTO messages (id, author_kind, author_name, text, reply_to, sent_at) VALUES (?, ?, ?, ?, ?, ?)"
   ( Op \message ->
-      [ CA.encode CA.int message.id
-      , CA.encode CA.string $ if toLower message.author == assistantName then "assistant" else "human"
-      , CA.encode CA.string $ if toLower message.author == assistantName then "" else message.author
+      [ CA.encode codec message.id
+      , CA.encode CA.string $ if isAssistant message.author then "assistant" else "human"
+      , CA.encode CA.string $ if isAssistant message.author then "" else printAuthor message.author
       , CA.encode CA.string message.text
-      , CA.encode (Compat.maybe CA.int) message.replyTo
+      , CA.encode (Compat.maybe codec) message.replyTo
       , CA.encode CA.number message.sentAt
       ]
   )
   (pure unit)
 
-insertImageLink :: Statement { messageId :: Int, imageId :: Int, position :: Int } Unit
+insertImageLink :: Statement { messageId :: MessageId, imageId :: ImageId, position :: Int } Unit
 insertImageLink = Sql.statement
   "INSERT OR IGNORE INTO message_images (message_id, image_id, position) VALUES (?, ?, ?)"
-  (Op \link -> [ CA.encode CA.int link.messageId, CA.encode CA.int link.imageId, CA.encode CA.int link.position ])
+  (Op \link -> [ CA.encode codec link.messageId, CA.encode codec link.imageId, CA.encode CA.int link.position ])
   (pure unit)
 
-insertReaction :: Statement { messageId :: Int, emoji :: String, reactor :: String } Unit
+insertReaction :: Statement { messageId :: MessageId, emoji :: String, reactor :: String } Unit
 insertReaction = Sql.statement
   "INSERT OR IGNORE INTO reactions (message_id, emoji, reactor) VALUES (?, ?, ?)"
-  (Op \reaction -> [ CA.encode CA.int reaction.messageId, CA.encode CA.string reaction.emoji, CA.encode CA.string reaction.reactor ])
+  (Op \reaction -> [ CA.encode codec reaction.messageId, CA.encode CA.string reaction.emoji, CA.encode CA.string reaction.reactor ])
   (pure unit)

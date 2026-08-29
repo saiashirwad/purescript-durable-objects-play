@@ -8,6 +8,12 @@
  * @type {ReadonlySet<string>}
  */
 const supportedImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+/**
+ * A positive image id validated at the upload boundary.
+ *
+ * @typedef {number} ImageId
+ */
+
 
 /**
  * Shrink to at most 1600px on the long side. Keep alpha-capable raster types
@@ -44,7 +50,7 @@ const shrink = (file) => {
  * Read an image id from an upload response.
  *
  * @param {unknown} value
- * @returns {number}
+ * @returns {ImageId}
  */
 const imageId = (value) => {
   if (typeof value !== "object" || value === null || !("id" in value)) {
@@ -62,10 +68,10 @@ const imageId = (value) => {
  *
  * @param {string} endpoint
  * @param {File[]} files
- * @returns {Promise<number[]>}
+ * @returns {Promise<ImageId[]>}
  */
 const upload = async (endpoint, files) => {
-  /** @type {number[]} */
+  /** @type {ImageId[]} */
   const ids = [];
   for (const file of files) {
     if (!supportedImageTypes.has(file.type)) {
@@ -88,6 +94,6 @@ const upload = async (endpoint, files) => {
  * Upload files that PureScript selected from the dialog or clipboard.
  *
  * @param {string} endpoint
- * @returns {(files: File[]) => AsyncEffect<number[]>}
+ * @returns {(files: File[]) => AsyncEffect<ImageId[]>}
  */
 export const uploadFiles = (endpoint) => (files) => () => upload(endpoint, files);

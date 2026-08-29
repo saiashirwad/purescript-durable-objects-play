@@ -14,7 +14,7 @@ import Chat.Client (RoomId)
 import Chat.Page.Browser (TimeFormatter)
 import Chat.Page.Icons (replyIcon)
 import Chat.Page.Shared (avatar, imageUrl, quiet)
-import Chat.Room (Message, assistantName)
+import Chat.Room (Message, MessageId, isAssistant, printAuthor, printMessageId)
 import Chat.Style (styles)
 import Data.Array (elem, length, zip)
 import Data.Array as Array
@@ -37,14 +37,14 @@ import UI.Icon as Icon
 import UI.Style (css)
 
 type Actions action =
-  { react :: Int -> String -> action
-  , jumpTo :: Int -> action
-  , reply :: Maybe Int -> action
+  { react :: MessageId -> String -> action
+  , jumpTo :: MessageId -> action
+  , reply :: Maybe MessageId -> action
   }
 
 type MessageRoom row =
   { id :: RoomId
-  , messages :: Map.Map Int Message
+  , messages :: Map.Map MessageId Message
   | row
   }
 
@@ -70,21 +70,22 @@ emptyRoom =
 messageItem :: forall action w row. Actions action -> TimeFormatter -> String -> MessageRoom row -> Tuple ThreadPosition Message -> HH.HTML w action
 messageItem actions formatTime author room (Tuple position message) =
   HH.li
-    [ HP.id $ "msg-" <> show message.id
+    [ HP.id $ "msg-" <> show (printMessageId message.id)
     , css $ styles.message <> guard mine styles.mine <> guard continued styles.continued
     , dataAttr "ui" "message"
     ]
-    $ guard (not mine) [ if continued then HH.span [ css styles.gutter, ARIA.hidden "true" ] [] else avatar (guard bot styles.botAvatar) message.author ]
+    $ guard (not mine) [ if continued then HH.span [ css styles.gutter, ARIA.hidden "true" ] [] else avatar (guard bot styles.botAvatar) authorName ]
         <> [ HH.div [ css styles.stack ] [ bubble, reactions, actionBar ] ]
   where
   continued = position == ContinuesThread
-  mine = message.author == author
-  bot = message.author == assistantName
+  mine = authorName == author
+  bot = isAssistant message.author
   mentioned = author `elem` message.mentions
   headless = mine || continued
+  authorName = printAuthor message.author
 
   bubble = HH.div [ css bubbleStyle ] $ fold
-    [ guard (not headless) [ HH.span [ css styles.author ] [ HH.text message.author ] ]
+    [ guard (not headless) [ HH.span [ css styles.author ] [ HH.text authorName ] ]
     , foldMap (pure <<< quote) $ message.replyTo >>= \id -> Map.lookup id room.messages
     , markdown author mine message.text
     , image <$> message.images
@@ -101,14 +102,14 @@ messageItem actions formatTime author room (Tuple position message) =
 
   quote parent =
     Button.button (quiet { styles = styles.quote <> guard mine styles.mineQuote }) [ HE.onClick \_ -> actions.jumpTo parent.id ]
-      [ HH.span [ css styles.quoteAuthor ] [ HH.text parent.author ]
+      [ HH.span [ css styles.quoteAuthor ] [ HH.text $ printAuthor parent.author ]
       , HH.span [ css $ styles.quoteText <> guard mine styles.mineQuoteText ]
           [ HH.text $ String.take 120 $ Markdown.plain parent.text ]
       ]
 
   image n =
     HH.a [ css styles.imageLink, HP.href (imageUrl room.id n), HP.target "_blank", HP.rel "noopener noreferrer" ]
-      [ HH.img [ css styles.image, HP.src (imageUrl room.id n), HP.alt $ message.author <> " attached an image" ] ]
+      [ HH.img [ css styles.image, HP.src (imageUrl room.id n), HP.alt $ authorName <> " attached an image" ] ]
 
   reactions
     | Array.null message.reactions = HH.text ""
@@ -118,7 +119,7 @@ messageItem actions formatTime author room (Tuple position message) =
           [ HH.text emoji, HH.span [ css styles.reactionCount ] [ HH.text $ show (length by) ] ]
 
   actionBar =
-    HH.div [ css $ styles.actions <> guard mine styles.mineActions, ARIA.label $ "Actions for " <> message.author <> "'s message", dataAttr "ui" "actions" ] $
+    HH.div [ css $ styles.actions <> guard mine styles.mineActions, ARIA.label $ "Actions for " <> authorName <> "'s message", dataAttr "ui" "actions" ] $
       (quickEmojis <#> \emoji -> Button.iconButton ("React with " <> emoji) tiny [ HP.title emoji, HE.onClick \_ -> actions.react message.id emoji ] [ HH.text emoji ])
         <> [ Button.iconButton "Reply" tiny [ HP.title "Reply", HE.onClick \_ -> actions.reply (Just message.id) ] [ Icon.render replyIcon ] ]
 

@@ -16,7 +16,7 @@ import Chat.Page.Browser (NotificationPermission(..), away, copyText, interval, 
 import Chat.Page.Icons (bellIcon, linkIcon)
 import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (Action(..), App, ComposerStatus(..), RoomAction(..), RoomToken, RoomView, View(..), advanceRoomToken, modifyRoomAt, withRoom)
-import Chat.Room (Message, RoomEvents, describeReactError)
+import Chat.Room (Message, MessageId, RoomEvents, describeReactError, printAuthor, printMessageId)
 import Chat.Style (styles)
 import Cloudflare.Durable (Signal(..))
 import Cloudflare.Durable.Rpc as Rpc
@@ -131,7 +131,7 @@ handle = case _ of
   CopyLink -> withRoom \room -> do
     copied <- liftAff $ copyText room.shareUrl
     when copied $ modifyRoomAt room.token _ { copied = true }
-  JumpTo id -> liftEffect $ scrollToId $ "msg-" <> show id
+  JumpTo id -> liftEffect $ scrollToId $ "msg-" <> show (printMessageId id)
   React id emoji -> withRoom \room -> do
     { author } <- H.get
     outcome <- liftAff $ Rpc.run $ room.api.react { id, emoji, by: author }
@@ -207,15 +207,15 @@ onMessage token message = do
   pinned <- withMessages nearBottom
   modifyRoomAt token \room -> room
     { messages = Map.insert message.id message room.messages
-    , typing = Map.delete message.author room.typing
+    , typing = Map.delete (printAuthor message.author) room.typing
     }
   { author } <- H.get
-  when (fromMaybe true pinned || message.author == author)
+  when (fromMaybe true pinned || printAuthor message.author == author)
     $ withRoomAt token
     $ const
     $ void
     $ withMessages scrollToEnd
-  when (message.author /= author) $ announce token message (author `elem` message.mentions)
+  when (printAuthor message.author /= author) $ announce token message (author `elem` message.mentions)
 
 announce :: forall m. MonadAff m => RoomToken -> Message -> Boolean -> App m Unit
 announce token message mentioned = do
@@ -226,7 +226,7 @@ announce token message mentioned = do
     withRoomAt token \room -> liftEffect do
       when gone $ setTitle $ "(" <> show room.unread <> ") Chat"
       when (state.notifications == Granted) $ notify
-        { title: (if mentioned then "@" <> state.author <> " · " else "") <> message.author
+        { title: (if mentioned then "@" <> state.author <> " · " else "") <> printAuthor message.author
         , body: String.take 200 (Markdown.plain message.text)
         , tag: "room-" <> Chat.printRoomId room.id
         }
@@ -267,7 +267,7 @@ withRoomAt token use = H.get >>= \state -> case state.view of
 withMessages :: forall a m. MonadAff m => (HTMLElement -> Effect a) -> App m (Maybe a)
 withMessages action = H.getHTMLElementRef messagesRef >>= traverse (liftEffect <<< action)
 
-byId :: Array Message -> Map.Map Int Message
+byId :: Array Message -> Map.Map MessageId Message
 byId = Map.fromFoldable <<< map \message -> Tuple message.id message
 
 shortId :: RoomId -> String

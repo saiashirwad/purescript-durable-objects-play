@@ -28,7 +28,7 @@ import Data.Argonaut.Core as J
 import Data.Array as Array
 import Data.Codec.Argonaut as CA
 import Data.Array (length)
-import Data.Either (Either(..))
+import Data.Either (Either(..), fromRight, isLeft)
 import Data.Foldable (for_)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), isJust)
@@ -55,7 +55,7 @@ main = launchAff_ do
     first <- chat.post { author: "ann", text: "hello", images: [], replyTo: Nothing }
     second <- chat.post { author: "bob", text: "hi", images: [], replyTo: Nothing }
     snapshot <- Rpc.infallible $ chat.snapshot unit
-    pure $ (_.id <$> snapshot.messages) == [ 1, 2 ] && first.id == 1 && second.author == "bob"
+    pure $ (_.id <$> snapshot.messages) == [ messageId 1, messageId 2 ] && first.id == messageId 1 && ChatRoom.printAuthor second.author == "bob"
 
   check "a blank post is a domain error" do
     let chat = Durable.getByName rooms "validation"
@@ -68,6 +68,16 @@ main = launchAff_ do
     pure $ accepted == Right "ann-1"
       && invalid == Left (DomainError AuthorInvalid)
       && reserved == Left (DomainError AuthorReserved)
+  check "semantic ids and authors validate their wire values" do
+    let invalidMessage = CA.decode (codec :: CA.JsonCodec ChatRoom.MessageId) $ J.fromNumber 0.0
+    let invalidImage = CA.decode (codec :: CA.JsonCodec ChatRoom.ImageId) $ J.fromNumber (-1.0)
+    let invalidAuthor = CA.decode (codec :: CA.JsonCodec ChatRoom.Author) $ J.fromString "Sai Ashirwad"
+    let assistant = CA.decode (codec :: CA.JsonCodec ChatRoom.Author) $ J.fromString "AI"
+    pure
+      $ isLeft invalidMessage
+          && isLeft invalidImage
+          && isLeft invalidAuthor
+          && map ChatRoom.printAuthor assistant == Right "ai"
 
   check "nullary domain errors reject an unexpected id" do
     let
@@ -124,7 +134,7 @@ main = launchAff_ do
     pure $ length other.messages == 0 && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
 
   check "room migration imports legacy keys once and deletes both" do
-    let current = (chatMessage 7 "ann" 7.0 Nothing) { text = "current", images = [ 4 ], mentions = [], reactions = [ { emoji: "👍", by: [ "bob" ] } ] }
+    let current = (chatMessage 7 "ann" 7.0 Nothing) { text = "current", images = [ imageId 4 ], mentions = [], reactions = [ { emoji: "👍", by: [ "bob" ] } ] }
     currentRooms <- Simulator.simulate $ seededStoreLive false (Just [ current ]) (Just [ { id: 1, author: "old", text: "ignored", sentAt: 1.0 } ])
     currentId <- Durable.newUniqueId currentRooms
     currentInspection <- Rpc.run $ (Durable.get currentRooms currentId).inspect unit
@@ -157,7 +167,7 @@ main = launchAff_ do
     seen <- liftEffect $ Ref.read logs
     snapshot <- Rpc.run $ (Durable.get bots id).snapshot unit
     pure $ seen == [ "opened", "presence [\"ann\"]", "message hey @ai, who is here?", "typing ai", "message hello ann, just us two" ]
-      && ((map (map _.author <<< _.messages) snapshot) == Right [ "ann", "ai" ])
+      && ((map (map (ChatRoom.printAuthor <<< _.author) <<< _.messages) snapshot) == Right [ "ann", "ai" ])
 
   check "assistant triggers use parsed exact mentions" do
     quietModel <- Model.scripted []
@@ -175,7 +185,7 @@ main = launchAff_ do
       }
     Simulator.advance timeline (Milliseconds 0.0)
     snapshot <- Rpc.run $ chat.snapshot unit
-    pure $ map (map _.author <<< _.messages) snapshot == Right [ "ann" ]
+    pure $ map (map (ChatRoom.printAuthor <<< _.author) <<< _.messages) snapshot == Right [ "ann" ]
 
   check "assistant matching ignores case and keeps only the latest pending reply" do
     model <- Model.scripted
@@ -190,7 +200,7 @@ main = launchAff_ do
     _ <- Rpc.run $ chat.post { author: "bob", text: "second @ai", images: [], replyTo: Nothing }
     Simulator.advance timeline (Milliseconds 0.0)
     snapshot <- Rpc.run $ chat.snapshot unit
-    pure $ map (map _.replyTo <<< _.messages) snapshot == Right [ Nothing, Nothing, Just 2 ]
+    pure $ map (map _.replyTo <<< _.messages) snapshot == Right [ Nothing, Nothing, Just (messageId 2) ]
   check "assistant retries transient failures and emits one reply" do
     attempts <- liftEffect $ Ref.new 0
     let
@@ -241,19 +251,19 @@ main = launchAff_ do
     attempted <- liftEffect $ Ref.read attempts
     pure
       $ map (map _.text <<< _.messages) snapshot == Right [ "answer @ai", "I could not answer right now." ]
-          && map (map _.replyTo <<< _.messages) snapshot == Right [ Nothing, Just 1 ]
+          && map (map _.replyTo <<< _.messages) snapshot == Right [ Nothing, Just (messageId 1) ]
           && attempted == 1
 
   check "replies must point at a real message; mentions are recorded" do
     let chat = Durable.getByName rooms "threads"
     first <- Rpc.run $ chat.post { author: "ann", text: "hello @bob", images: [], replyTo: Nothing }
-    bad <- Rpc.run $ chat.post { author: "bob", text: "??", images: [], replyTo: Just 99 }
-    good <- Rpc.run $ chat.post { author: "bob", text: "hi!", images: [], replyTo: Just 1 }
-    missing <- Rpc.run $ chat.post { author: "bob", text: "pic", images: [ 42 ], replyTo: Nothing }
+    bad <- Rpc.run $ chat.post { author: "bob", text: "??", images: [], replyTo: Just (messageId 99) }
+    good <- Rpc.run $ chat.post { author: "bob", text: "hi!", images: [], replyTo: Just (messageId 1) }
+    missing <- Rpc.run $ chat.post { author: "bob", text: "pic", images: [ imageId 42 ], replyTo: Nothing }
     pure $ map _.mentions first == Right [ "bob" ]
-      && bad == Left (DomainError (NoSuchReply 99))
-      && map _.replyTo good == Right (Just 1)
-      && missing == Left (DomainError (NoSuchImage 42))
+      && bad == Left (DomainError (NoSuchReply (messageId 99)))
+      && map _.replyTo good == Right (Just (messageId 1))
+      && missing == Left (DomainError (NoSuchImage (imageId 42)))
 
   check "reactions toggle per person and broadcast an update" do
     id <- Durable.newUniqueId rooms
@@ -261,24 +271,24 @@ main = launchAff_ do
     logs <- liftEffect $ Ref.new []
     _ <- liftEffect $ Durable.listen rooms id "ann" \signal -> Ref.modify_ (_ <> [ describe signal ]) logs
     _ <- Rpc.run $ chat.post { author: "ann", text: "vote", images: [], replyTo: Nothing }
-    a <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "ann" }
-    b <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "bob" }
-    c <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "ann" }
-    d <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "bob" }
-    none <- Rpc.run $ chat.react { id: 7, emoji: "👍", by: "bob" }
+    a <- Rpc.run $ chat.react { id: messageId 1, emoji: "👍", by: "ann" }
+    b <- Rpc.run $ chat.react { id: messageId 1, emoji: "👍", by: "bob" }
+    c <- Rpc.run $ chat.react { id: messageId 1, emoji: "👍", by: "ann" }
+    d <- Rpc.run $ chat.react { id: messageId 1, emoji: "👍", by: "bob" }
+    none <- Rpc.run $ chat.react { id: messageId 7, emoji: "👍", by: "bob" }
     seen <- liftEffect $ Ref.read logs
     pure $ map _.reactions a == Right [ { emoji: "👍", by: [ "ann" ] } ]
       && map _.reactions b == Right [ { emoji: "👍", by: [ "ann", "bob" ] } ]
       && map _.reactions c == Right [ { emoji: "👍", by: [ "bob" ] } ]
       && map _.reactions d == Right []
-      && none == Left (DomainError (NoSuchMessage 7))
+      && none == Left (DomainError (NoSuchMessage (messageId 7)))
       && Array.drop 3 seen == [ "updated [\"👍×1\"]", "updated [\"👍×2\"]", "updated [\"👍×1\"]", "updated []" ]
 
   check "reactions normalize input and require a reactor" do
     let chat = Durable.getByName rooms "reaction-validation"
     _ <- Rpc.run $ chat.post { author: "ann", text: "vote", images: [], replyTo: Nothing }
-    normalized <- Rpc.run $ chat.react { id: 1, emoji: " 👍 ", by: " ann " }
-    blankReactor <- Rpc.run $ chat.react { id: 1, emoji: "👍", by: "   " }
+    normalized <- Rpc.run $ chat.react { id: messageId 1, emoji: " 👍 ", by: " ann " }
+    blankReactor <- Rpc.run $ chat.react { id: messageId 1, emoji: "👍", by: "   " }
     pure $ map _.reactions normalized == Right [ { emoji: "👍", by: [ "ann" ] } ]
       && blankReactor == Left (DomainError ReactorRequired)
 
@@ -294,7 +304,7 @@ main = launchAff_ do
     tooLarge <- Durable.http rooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: oversized }
     served <- Durable.http rooms id $ Worker.requestTo "http://room/image/1"
     missing <- Durable.http rooms id $ Worker.requestTo "http://room/image/9"
-    posted <- Rpc.run $ (Durable.get rooms id).post { author: "ann", text: "", images: [ 1 ], replyTo: Nothing }
+    posted <- Rpc.run $ (Durable.get rooms id).post { author: "ann", text: "", images: [ imageId 1 ], replyTo: Nothing }
     pure $ Worker.status uploaded == 200 && body == "{\"id\":1}"
       && Worker.status text == 415
       && Worker.status svg == 415
@@ -303,7 +313,7 @@ main = launchAff_ do
       && Worker.status served == 200
       && Worker.responseHeader served "x-content-type-options" == Just "nosniff"
       && Worker.status missing == 404
-      && map _.images posted == Right [ 1 ]
+      && map _.images posted == Right [ imageId 1 ]
 
   check "abandoned uploads expire while attached images remain" do
     mediaTimeline <- Simulator.clock
@@ -312,7 +322,7 @@ main = launchAff_ do
     let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
     _ <- Durable.http mediaRooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
     _ <- Durable.http mediaRooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
-    _ <- Rpc.run $ (Durable.get mediaRooms id).post { author: "ann", text: "", images: [ 2 ], replyTo: Nothing }
+    _ <- Rpc.run $ (Durable.get mediaRooms id).post { author: "ann", text: "", images: [ imageId 2 ], replyTo: Nothing }
     Simulator.advance mediaTimeline (Milliseconds 86400001.0)
     abandoned <- Durable.http mediaRooms id $ Worker.requestTo "http://room/image/1"
     attached <- Durable.http mediaRooms id $ Worker.requestTo "http://room/image/2"
@@ -334,19 +344,19 @@ main = launchAff_ do
     let text = CodeUnits.fromCharArray $ Array.replicate ChatRoom.maxTextLength 'x'
     let
       stored = Array.range 1 500 <#> \id ->
-        (chatMessage id "ann" 1.0 Nothing) { images = if id == 1 then [ 1 ] else [] }
+        (chatMessage id "ann" 1.0 Nothing) { images = if id == 1 then [ imageId 1 ] else [] }
     retainedRooms <- Simulator.simulate $ seededStoreLive true (Just stored) Nothing
     id <- Durable.newUniqueId retainedRooms
-    posted <- Rpc.run $ (Durable.get retainedRooms id).post { author: "ann", text, images: [], replyTo: Nothing }
+    posted <- Rpc.run $ (Durable.get retainedRooms id).post { author: testAuthor "ann", text, images: [], replyTo: Nothing }
     inspection <- Rpc.run $ (Durable.get retainedRooms id).inspect unit
     removedImage <- Durable.http retainedRooms id $ Worker.requestTo "http://room/image/1"
     replacement <- Durable.http retainedRooms id $ Worker.requestWith
       { url: "http://room/image", method: "POST", contentType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" }
     replacementBody <- Worker.responseText replacement
-    pure $ map _.id posted == Right 501
+    pure $ map _.id posted == Right (messageId 501)
       && (map (Array.length <<< _.messages) inspection == Right 500)
-      && (map (map _.id <<< Array.head <<< _.messages) inspection == Right (Just 2))
-      && (map (map _.id <<< Array.last <<< _.messages) inspection == Right (Just 501))
+      && (map (map _.id <<< Array.head <<< _.messages) inspection == Right (Just (messageId 2)))
+      && (map (map _.id <<< Array.last <<< _.messages) inspection == Right (Just (messageId 501)))
       && (map _.currentPresent inspection == Right false)
       && Worker.status removedImage == 404
       && replacementBody == "{\"id\":2}"
@@ -382,15 +392,24 @@ main = launchAff_ do
 
 chatMessage :: Int -> String -> Number -> Maybe Int -> ChatRoom.Message
 chatMessage id author sentAt replyTo =
-  { id
-  , author
+  { id: messageId id
+  , author: testAuthor author
   , text: "message"
   , images: []
-  , replyTo
+  , replyTo: messageId <$> replyTo
   , mentions: []
   , reactions: []
   , sentAt
   }
+
+messageId :: Int -> ChatRoom.MessageId
+messageId = ChatRoom.MessageId
+
+imageId :: Int -> ChatRoom.ImageId
+imageId = ChatRoom.ImageId
+
+testAuthor :: String -> ChatRoom.Author
+testAuthor = fromRight ChatRoom.Assistant <<< ChatRoom.mkAuthor
 
 withLiveHooks
   :: forall name api events
@@ -412,7 +431,7 @@ succeeds call = Rpc.run call >>= case _ of
 
 type StoreTestApi =
   ( inspect :: Unit -> Rpc NoError { messages :: Array ChatRoom.Message, currentPresent :: Boolean, legacyPresent :: Boolean }
-  , post :: ChatRoom.NewMessage -> Rpc NoError ChatRoom.Message
+  , post :: ChatRoom.AcceptedMessage -> Rpc NoError ChatRoom.Message
   )
 
 storeTestObject :: Object "StoreTest" StoreTestApi ()

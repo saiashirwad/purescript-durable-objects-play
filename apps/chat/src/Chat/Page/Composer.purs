@@ -15,7 +15,7 @@ import Chat.Page.Browser (nowMs)
 import Chat.Page.Icons (imageIcon, replyIcon, sendIcon)
 import Chat.Page.Shared (avatar, blank, imageEndpoint, imageUrl, quiet, small)
 import Chat.Page.Types (App, ComposerAction(..), ComposerState, ComposerStatus(..), RoomToken, RoomView, modifyRoom, modifyRoomAt, withRoom)
-import Chat.Room (Message, assistantName, describePostError)
+import Chat.Room (ImageId, Message, MessageId, assistantName, describePostError, printAuthor, printImageId)
 import Chat.Style (styles)
 import Cloudflare.Durable.Rpc as Rpc
 import Control.Promise (Promise, toAffE)
@@ -54,7 +54,7 @@ import Web.HTML.HTMLElement (click, focus)
 import Web.HTML.HTMLInputElement as InputElement
 import Web.UIEvent.KeyboardEvent (key, toEvent)
 
-foreign import uploadFiles :: String -> Array File -> Effect (Promise (Array Int))
+foreign import uploadFiles :: String -> Array File -> Effect (Promise (Array ImageId))
 
 composerRef :: H.RefLabel
 composerRef = H.RefLabel "composer"
@@ -117,7 +117,7 @@ replyChip room = case room.composer.replyTo >>= \id -> Map.lookup id room.messag
     HH.div [ css styles.replyChip ]
       [ Icon.render replyIcon
       , HH.span [ css styles.replyChipText ]
-          [ HH.text "Replying to ", HH.strong_ [ HH.text parent.author ], HH.text $ ": " <> String.take 60 (Markdown.plain parent.text) ]
+          [ HH.text "Replying to ", HH.strong_ [ HH.text $ printAuthor parent.author ], HH.text $ ": " <> String.take 60 (Markdown.plain parent.text) ]
       , Button.iconButton "Cancel reply" (quiet { disabled = not (isEditing room) }) [ HP.title "Cancel", HE.onClick \_ -> Reply Nothing ] [ HH.text "×" ]
       ]
 
@@ -131,20 +131,20 @@ attachmentStrip room
       where
       thumbnail n = HH.span [ css styles.attachment ]
         [ HH.img [ css styles.thumbnail, HP.src (imageUrl room.id n), HP.alt "Image attachment preview" ]
-        , Button.iconButton ("Remove attachment " <> show n) (small { disabled = not (isEditing room), styles = styles.remove }) [ HE.onClick \_ -> Detach n ] [ HH.text "×" ]
+        , Button.iconButton ("Remove attachment " <> show (printImageId n)) (small { disabled = not (isEditing room), styles = styles.remove }) [ HE.onClick \_ -> Detach n ] [ HH.text "×" ]
         ]
 
 suggestions
   :: forall row
    . String
-  -> { draft :: String, members :: Array String, messages :: Map.Map Int Message | row }
+  -> { draft :: String, members :: Array String, messages :: Map.Map MessageId Message | row }
   -> Array String
 suggestions author room = case mentionFocus room.draft of
   Just { query } ->
     take 6 $ filter (matches query) candidates
   _ -> []
   where
-  candidates = Array.nubByEq sameName $ [ assistantName ] <> room.members <> (Array.fromFoldable room.messages <#> _.author)
+  candidates = Array.nubByEq sameName $ [ assistantName ] <> room.members <> (Array.fromFoldable room.messages <#> printAuthor <<< _.author)
   sameName left right = String.toLower left == String.toLower right
   matches query name = not (sameName name author) && isJust (stripPrefix (Pattern (String.toLower query)) (String.toLower name))
 
@@ -216,7 +216,7 @@ pingTyping = withRoom \room -> unless (blank room.composer.draft) do
     { author } <- H.get
     void $ liftAff $ Rpc.run $ room.api.typing author
 
-upload :: forall m. MonadAff m => RoomToken -> Effect (Promise (Array Int)) -> App m Unit
+upload :: forall m. MonadAff m => RoomToken -> Effect (Promise (Array ImageId)) -> App m Unit
 upload token go = do
   modifyRoomAt token \room ->
     if isEditing room then
@@ -242,7 +242,7 @@ modifyComposer update = modifyRoom $ mapComposer update
 mapComposer :: (ComposerState -> ComposerState) -> RoomView -> RoomView
 mapComposer update room = room { composer = update room.composer }
 
-suggestionInput :: RoomView -> { draft :: String, members :: Array String, messages :: Map.Map Int Message }
+suggestionInput :: RoomView -> { draft :: String, members :: Array String, messages :: Map.Map MessageId Message }
 suggestionInput room = { draft: room.composer.draft, members: room.members, messages: room.messages }
 
 focusComposer :: forall m. MonadAff m => App m Unit

@@ -1,10 +1,20 @@
 module Chat.Room.Domain
-  ( UserName
+  ( Author(..)
+  , ImageId(..)
+  , MessageId(..)
+  , UserName
   , UserNameError(..)
   , assistantName
   , describeUserNameError
+  , isAssistant
   , maxUserNameLength
+  , mkAuthor
+  , mkImageId
+  , mkMessageId
   , mkUserName
+  , printAuthor
+  , printImageId
+  , printMessageId
   , printUserName
   ) where
 
@@ -14,7 +24,39 @@ import Cloudflare.Durable.Codec (class HasCodec)
 import Data.Codec.Argonaut as CA
 import Data.Either (Either(..), hush)
 import Data.String (length, toLower, trim)
+import Data.Maybe (Maybe(..))
 import Markdown as Markdown
+
+newtype MessageId = MessageId Int
+
+derive newtype instance eqMessageId :: Eq MessageId
+derive newtype instance ordMessageId :: Ord MessageId
+derive newtype instance showMessageId :: Show MessageId
+
+instance hasCodecMessageId :: HasCodec MessageId where
+  codec = CA.prismaticCodec "MessageId" mkMessageId printMessageId CA.int
+
+newtype ImageId = ImageId Int
+
+derive newtype instance eqImageId :: Eq ImageId
+derive newtype instance ordImageId :: Ord ImageId
+derive newtype instance showImageId :: Show ImageId
+
+instance hasCodecImageId :: HasCodec ImageId where
+  codec = CA.prismaticCodec "ImageId" mkImageId printImageId CA.int
+
+data Author
+  = Human UserName
+  | Assistant
+
+derive instance eqAuthor :: Eq Author
+derive instance ordAuthor :: Ord Author
+
+instance showAuthor :: Show Author where
+  show = printAuthor
+
+instance hasCodecAuthor :: HasCodec Author where
+  codec = CA.prismaticCodec "Author" (hush <<< mkAuthor) printAuthor CA.string
 
 newtype UserName = UserName String
 
@@ -41,6 +83,37 @@ instance hasCodecUserName :: HasCodec UserName where
 
 assistantName :: String
 assistantName = "ai"
+
+mkMessageId :: Int -> Maybe MessageId
+mkMessageId id
+  | id > 0 = Just $ MessageId id
+  | otherwise = Nothing
+
+printMessageId :: MessageId -> Int
+printMessageId (MessageId id) = id
+
+mkImageId :: Int -> Maybe ImageId
+mkImageId id
+  | id > 0 = Just $ ImageId id
+  | otherwise = Nothing
+
+printImageId :: ImageId -> Int
+printImageId (ImageId id) = id
+
+mkAuthor :: String -> Either UserNameError Author
+mkAuthor raw
+  | toLower (trim raw) == assistantName = Right Assistant
+  | otherwise = Human <$> mkUserName raw
+
+printAuthor :: Author -> String
+printAuthor = case _ of
+  Human user -> printUserName user
+  Assistant -> assistantName
+
+isAssistant :: Author -> Boolean
+isAssistant = case _ of
+  Human _ -> false
+  Assistant -> true
 
 maxUserNameLength :: Int
 maxUserNameLength = 32

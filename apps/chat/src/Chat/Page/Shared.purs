@@ -13,7 +13,7 @@ import Prelude
 
 import Chat.Client (RoomId)
 import Chat.Client as Chat
-import Chat.Room (assistantName)
+import Chat.Room (ImageId, assistantName, printImageId)
 import Data.String (null, trim)
 import Data.String as String
 import Halogen.HTML as HH
@@ -44,5 +44,5 @@ avatar extra name = Avatar.avatar
 imageEndpoint :: RoomId -> String
 imageEndpoint id = "/rpc/Room/id/" <> Chat.printRoomId id <> "/http/image"
 
-imageUrl :: RoomId -> Int -> String
-imageUrl id n = imageEndpoint id <> "/" <> show n
+imageUrl :: RoomId -> ImageId -> String
+imageUrl id image = imageEndpoint id <> "/" <> show (printImageId image)
