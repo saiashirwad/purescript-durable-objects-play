@@ -93,7 +93,7 @@ test("two browser contexts exchange messages and absolute presence", async ({ br
 test("a live chat room has no automatic WCAG violations", async ({ page }) => {
   await joinNewRoom(page, "Accessible");
   await send(page, "A readable message");
-  const message = page.locator("[data-ui=message]").last();
+  const message = page.locator("[data-chat=message]").last();
   await message.evaluate(async element => {
     const animations: Array<{ finished: Promise<unknown> }> = element.getAnimations();
     await Promise.all(animations.map(animation => animation.finished));

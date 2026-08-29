@@ -14,6 +14,7 @@ import Chat.Page.Icons (replyIcon)
 import Chat.Page.Shared (avatar, quiet)
 import Chat.Room (Message, MessageId, isAssistant, printAuthor, printMessageId)
 import Chat.Session (RoomSession)
+import Chat.Style.Hook as Hook
 import Chat.Style.Message (Continuity(..), Ownership(..), styles)
 import Chat.Style.Message as MessageStyle
 import Data.Array (elem, length, zip)
@@ -32,7 +33,6 @@ import Halogen.HTML.Properties.ARIA as ARIA
 import Markdown (Block(..), Inline(..))
 import Markdown as Markdown
 import UI.Button as Button
-import UI.Core (dataAttr)
 import UI.Icon as Icon
 import UI.Style (css)
 
@@ -66,7 +66,7 @@ messageItem actions formatTime author room (Tuple continuity message) =
   HH.li
     [ HP.id $ "msg-" <> show (printMessageId message.id)
     , css $ MessageStyle.row { ownership, continuity }
-    , dataAttr "ui" "message"
+    , Hook.property Hook.Message
     ]
     $ guard (not mine) [ if continued then HH.span [ css styles.gutter, ARIA.hidden "true" ] [] else avatar (MessageStyle.avatar bot) authorName ]
         <> [ HH.div [ css styles.stack ] [ bubble, reactions, actionBar ] ]
@@ -106,7 +106,7 @@ messageItem actions formatTime author room (Tuple continuity message) =
           [ HH.text emoji, HH.span [ css styles.reactionCount ] [ HH.text $ show (length by) ] ]
 
   actionBar =
-    HH.div [ css $ MessageStyle.actions ownership, ARIA.label $ "Actions for " <> authorName <> "'s message", dataAttr "ui" "actions" ] $
+    HH.div [ css $ MessageStyle.actions ownership, ARIA.label $ "Actions for " <> authorName <> "'s message", Hook.property Hook.MessageActions ] $
       (quickEmojis <#> \emoji -> Button.iconButton ("React with " <> emoji) tiny [ HP.title emoji, HE.onClick \_ -> actions.react message.id emoji ] [ HH.text emoji ])
         <> [ Button.iconButton "Reply" tiny [ HP.title "Reply", HE.onClick \_ -> actions.reply (Just message.id) ] [ Icon.render replyIcon ] ]
 

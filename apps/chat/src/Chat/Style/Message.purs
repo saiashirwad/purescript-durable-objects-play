@@ -19,6 +19,7 @@ module Chat.Style.Message
 import Prelude
 
 import Chat.Style.Foundation (gutters, hairline, wash)
+import Chat.Style.Hook as Hook
 import UI.Style (Sheet, Style, (:=), create, var)
 import UI.Style as Style
 import UI.Theme (tokens)
@@ -95,7 +96,7 @@ styles =
       ]
   , message: create
       [ "align-items" := "flex-end"
-      , "animation" := "rise 200ms ease-out"
+      , "animation" := "chat-message-rise 200ms ease-out"
       , "display" := "flex"
       , "gap" := "0.625rem"
       , "max-inline-size" := "min(80%,42rem)"
@@ -399,5 +400,19 @@ sheet = Style.atoms (Style.sheetFromRecord styles) <> Style.global raw
 
 raw :: String
 raw =
-  "@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}"
-    <> "[data-ui=message]:hover [data-ui=actions],[data-ui=message]:focus-within [data-ui=actions]{opacity:1}"
+  "@keyframes chat-message-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}"
+    <> hoverActions
+    <> "@media (hover:none){"
+    <> Hook.selector Hook.MessageActions
+    <> "{opacity:1}}"
+
+hoverActions :: String
+hoverActions =
+  Hook.selector Hook.Message
+    <> ":hover "
+    <> Hook.selector Hook.MessageActions
+    <> ","
+    <> Hook.selector Hook.Message
+    <> ":focus-within "
+    <> Hook.selector Hook.MessageActions
+    <> "{opacity:1}"

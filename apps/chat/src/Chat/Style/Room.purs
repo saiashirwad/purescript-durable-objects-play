@@ -1,6 +1,7 @@
 module Chat.Style.Room
   ( Styles
   , Connection(..)
+  , dotDelay
   , member
   , presence
   , typing
@@ -12,7 +13,7 @@ module Chat.Style.Room
 import Prelude
 
 import Chat.Style.Foundation (glass, gutters, hairline)
-import UI.Style (Sheet, Style, (:=), create, var)
+import UI.Style (Sheet, Style, Var, (:=), create, var)
 import UI.Style as Style
 import UI.Theme (tokens)
 
@@ -21,6 +22,9 @@ data Connection
   | Disconnected
 
 derive instance eqConnection :: Eq Connection
+
+dotDelay :: Var
+dotDelay = Style.variable "chat-dot-delay"
 
 type Styles =
   { room :: Style
@@ -133,7 +137,8 @@ styles =
       , "gap" := "0.2rem"
       ]
   , dot: create
-      [ "animation" := "blink 1.2s infinite ease-in-out"
+      [ "animation" := "chat-typing-blink 1.2s infinite ease-in-out"
+      , "animation-delay" := var dotDelay
       , "background-color" := var tokens.textMuted
       , "block-size" := "0.35rem"
       , "border-radius" := "50%"
@@ -160,6 +165,4 @@ sheet :: Sheet
 sheet = Style.atoms (Style.sheetFromRecord styles) <> Style.global raw
 
 raw :: String
-raw =
-  "@keyframes blink{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}"
-    <> "[data-ui=dots] i:nth-child(2){animation-delay:.2s}[data-ui=dots] i:nth-child(3){animation-delay:.4s}"
+raw = "@keyframes chat-typing-blink{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}"

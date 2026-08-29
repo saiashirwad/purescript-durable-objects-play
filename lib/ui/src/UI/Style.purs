@@ -44,6 +44,7 @@ data State
   = Hover
   | Active
   | FocusVisible
+  | FocusWithin
   | Disabled
   | Checked
   | Open
@@ -222,6 +223,7 @@ stateSelector = case _ of
   Hover -> ":hover"
   Active -> ":active"
   FocusVisible -> ":focus-visible"
+  FocusWithin -> ":focus-within"
   Disabled -> ":disabled"
   Checked -> ":checked"
   Open -> "[data-open=true]"

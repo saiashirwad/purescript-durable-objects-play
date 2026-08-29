@@ -120,6 +120,10 @@ styles =
       , "padding-block" := "0.3rem"
       , "padding-inline" := "0.4rem 0.3rem"
       , "transition" := "border-color 120ms ease,box-shadow 120ms ease"
+      , on Style.FocusWithin
+          [ "border-color" := var tokens.accent
+          , "box-shadow" := "0 0 0 3px " <> var tokens.accentSoft <> "," <> var tokens.shadow
+          ]
       ]
   , input: create
       [ "background-color" := "transparent"
@@ -148,14 +152,7 @@ styles =
   }
 
 sheet :: Sheet
-sheet = Style.atoms (Style.sheetFromRecord styles) <> Style.global raw
+sheet = Style.atoms $ Style.sheetFromRecord styles
 
 raw :: String
-raw =
-  "[data-ui=composer]:focus-within{border-color:"
-    <> var tokens.accent
-    <> ";box-shadow:0 0 0 3px "
-    <> var tokens.accentSoft
-    <> ","
-    <> var tokens.shadow
-    <> "}"
+raw = ""

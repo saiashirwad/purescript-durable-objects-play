@@ -17,10 +17,11 @@ import Chat.Page.Icons (bellIcon, linkIcon)
 import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (Action(..), App, ComposerStatus(..), RoomAction(..), RoomToken, RoomView, View(..), advanceRoomToken, modifyRoomAt, withRoom)
 import Chat.Room (Message, MessageId, RoomEvents, printAuthor, printMessageId)
+import Chat.Style.Hook as Hook
 import Chat.Style.Room (Connection(..), styles)
 import Chat.Style.Room as RoomStyle
 import Cloudflare.Durable (Signal(..))
-import Data.Array (elem, length, mapWithIndex, replicate)
+import Data.Array (elem, length, mapWithIndex)
 import Data.Array as Array
 import Data.Either (either)
 import Data.Map as Map
@@ -30,6 +31,7 @@ import Data.String (joinWith)
 import Data.String as String
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
+import Data.Tuple.Nested ((/\))
 import Data.Variant (Variant, match)
 import Effect (Effect)
 import Effect.Aff.Class (class MonadAff, liftAff)
@@ -42,9 +44,8 @@ import Halogen.HTML.Properties.ARIA as ARIA
 import Halogen.Subscription (makeEmitter)
 import Markdown as Markdown
 import UI.Button as Button
-import UI.Core (dataAttr)
 import UI.Icon as Icon
-import UI.Style (css)
+import UI.Style (css, inlineVars)
 import Web.HTML.HTMLElement (HTMLElement)
 import Web.HTML.Location as Location
 
@@ -113,7 +114,9 @@ typingLine room =
     , ARIA.live "polite"
     , ARIA.atomic "true"
     ]
-    [ HH.span [ css styles.dots, ARIA.hidden "true", dataAttr "ui" "dots" ] $ replicate 3 $ HH.i [ css styles.dot ] []
+    [ HH.span [ css styles.dots, ARIA.hidden "true", Hook.property Hook.TypingDots ] $
+        Array.range 0 2 <#> \index ->
+          HH.i [ css styles.dot, inlineVars [ RoomStyle.dotDelay /\ (show (index * 200) <> "ms") ] ] []
     , HH.span_ [ HH.text $ who $ Array.fromFoldable $ Map.keys room.typing ]
     ]
   where

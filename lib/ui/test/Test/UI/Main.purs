@@ -21,6 +21,14 @@ main = do
     let css = render [ create [ "color" := "black", on Style.Hover [ "color" := "blue" ] ] ]
     pure $ contains (Pattern "color:black") css && contains (Pattern ":hover{color:blue}") css
 
+  check "focus-within is a typed element state" do
+    let css = render [ on Style.FocusWithin [ "border-color" := "blue" ] ]
+    pure $ contains (Pattern ":focus-within{border-color:blue}") css
+
+  check "sheets combine atoms before global rules" do
+    let css = Style.renderSheet $ Style.atoms [ "color" := "blue" ] <> Style.global "body{margin:0}"
+    pure $ contains (Pattern "color:blue") css && contains (Pattern "body{margin:0}") css
+
   check "theme CSS contains scoped semantic variables" do
     pure $ contains (Pattern ".ui-theme-light") Theme.render
       && contains (Pattern "--ui-color-background") Theme.render

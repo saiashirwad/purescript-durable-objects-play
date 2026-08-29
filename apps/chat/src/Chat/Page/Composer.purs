@@ -16,6 +16,7 @@ import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (App, ComposerAction(..), ComposerState, ComposerStatus(..), RoomToken, RoomView, modifyRoom, modifyRoomAt, withRoom)
 import Chat.Room (ImageId, Message, MessageId, assistantName, printAuthor, printImageId)
 import Chat.Style.Composer (styles)
+import Chat.Style.Hook as Hook
 import Control.Promise (Promise, toAffE)
 import Data.Array (filter, take)
 import Data.Array as Array
@@ -38,7 +39,7 @@ import Halogen.HTML.Properties as HP
 import Halogen.HTML.Properties.ARIA as ARIA
 import Markdown as Markdown
 import UI.Button as Button
-import UI.Core (Tone(..), dataAttr)
+import UI.Core (Tone(..))
 import UI.Icon as Icon
 import UI.Input as Input
 import UI.Status as Status
@@ -67,7 +68,7 @@ composer author room typing =
     , replyChip room
     , attachmentStrip room
     , suggestionBar author room
-    , HH.form [ css styles.composer, HE.onSubmit Submit, dataAttr "ui" "composer" ]
+    , HH.form [ css styles.composer, HE.onSubmit Submit, Hook.property Hook.Composer ]
         [ Button.iconButton "Attach image" (Button.defaults { tone = Quiet, disabled = not (isEditing room) }) [ HP.title "Attach image", HE.onClick \_ -> Attach ]
             [ Icon.styled styles.largeIcon imageIcon ]
         , HH.input
