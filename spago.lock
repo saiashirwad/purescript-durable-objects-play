@@ -242,6 +242,7 @@
             "maybe",
             "prelude",
             "strings",
+            "tailrec",
             "tuples",
             "unicode"
           ]

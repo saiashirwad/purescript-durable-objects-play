@@ -15,7 +15,8 @@ module Markdown
 import Prelude
 
 import Control.Alt ((<|>))
-import Data.Array (concatMap, cons, drop, mapMaybe, nub, null, snoc, span, takeWhile, uncons)
+import Control.Monad.Rec.Class (Step(..), tailRec)
+import Data.Array (concatMap, cons, drop, mapMaybe, nub, null, span, takeWhile, uncons)
 import Data.Array as Array
 import Data.CodePoint.Unicode (isAlphaNum, isSpace)
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -118,38 +119,39 @@ parse :: String -> Array Block
 parse = blocks <<< split (Pattern "\n") <<< S.replaceAll (Pattern "\r\n") (S.Replacement "\n")
 
 blocks :: Array String -> Array Block
-blocks lines = case uncons lines of
-  Nothing -> []
-  Just { head, tail }
-    | trim head == "" -> blocks tail
-    | Just fence <- stripPrefix (Pattern "```") head ->
-        let
-          { init: body, rest } = span (\l -> stripPrefix (Pattern "```") l == Nothing) tail
-          lang = if trim fence == "" then Nothing else Just (trim fence)
-        in
-          cons (Code lang (joinWith "\n" body)) (blocks (drop 1 rest))
-    | Just level <- heading head -> cons (Heading level.depth (inlines level.text)) (blocks tail)
-    | isQuote head ->
-        let
-          { init: quoted, rest } = span isQuote lines
-        in
-          cons (Quote (blocks (unquote <$> quoted))) (blocks rest)
-    | isBullet head ->
-        let
-          { init: items, rest } = span isBullet lines
-        in
-          cons (Bullets (inlines <<< unbullet <$> items)) (blocks rest)
-    | otherwise ->
-        let
-          { init: para, rest } = span isPlain lines
-        in
-          cons (Paragraph (inlines (joinWith "\n" para))) (blocks rest)
+blocks input = Array.reverse $ tailRec step { rest: input, acc: [] }
   where
+  step state = case uncons state.rest of
+    Nothing -> Done state.acc
+    Just { head, tail }
+      | trim head == "" -> Loop state { rest = tail }
+      | Just fence <- stripPrefix (Pattern "```") head ->
+          let
+            { init: body, rest } = span (\line -> stripPrefix (Pattern "```") line == Nothing) tail
+            lang = if trim fence == "" then Nothing else Just (trim fence)
+          in
+            Loop { rest: drop 1 rest, acc: cons (Code lang (joinWith "\n" body)) state.acc }
+      | Just level <- heading head -> Loop { rest: tail, acc: cons (Heading level.depth (inlines level.text)) state.acc }
+      | isQuote head ->
+          let
+            { init: quoted, rest } = span isQuote state.rest
+          in
+            Loop { rest, acc: cons (Quote (blocks (unquote <$> quoted))) state.acc }
+      | isBullet head ->
+          let
+            { init: items, rest } = span isBullet state.rest
+          in
+            Loop { rest, acc: cons (Bullets (inlines <<< unbullet <$> items)) state.acc }
+      | otherwise ->
+          let
+            { init: para, rest } = span isPlain state.rest
+          in
+            Loop { rest, acc: cons (Paragraph (inlines (joinWith "\n" para))) state.acc }
   isQuote = (_ /= Nothing) <<< stripPrefix (Pattern ">")
-  unquote l = fromMaybe l $ stripPrefix (Pattern "> ") l <|> stripPrefix (Pattern ">") l
-  isBullet l = stripPrefix (Pattern "- ") l /= Nothing || stripPrefix (Pattern "* ") l /= Nothing
+  unquote line = fromMaybe line $ stripPrefix (Pattern "> ") line <|> stripPrefix (Pattern ">") line
+  isBullet line = stripPrefix (Pattern "- ") line /= Nothing || stripPrefix (Pattern "* ") line /= Nothing
   unbullet = S.drop 2
-  isPlain l = trim l /= "" && not (isQuote l) && not (isBullet l) && heading l == Nothing && stripPrefix (Pattern "```") l == Nothing
+  isPlain line = trim line /= "" && not (isQuote line) && not (isBullet line) && heading line == Nothing && stripPrefix (Pattern "```") line == Nothing
 
 heading :: String -> Maybe { depth :: Int, text :: String }
 heading line =
@@ -166,38 +168,46 @@ inlines :: String -> Array Inline
 inlines = merge <<< go <<< toCodePointArray
   where
   go :: Array CodePoint -> Array Inline
-  go cps = case uncons cps of
-    Nothing -> []
-    Just { head: c, tail }
-      | c == cp '`', Just (Tuple body rest) <- upTo [ cp '`' ] tail -> cons (InlineCode (str body)) (go rest)
-      | c == cp '*', Just { head: c2, tail: t2 } <- uncons tail, c2 == cp '*', Just (Tuple body rest) <- upTo [ cp '*', cp '*' ] t2 ->
-          cons (Bold (inlines (str body))) (go rest)
-      | c == cp '*', Just (Tuple body rest) <- upTo [ cp '*' ] tail, not (null body) -> cons (Italic (inlines (str body))) (go rest)
-      | c == cp '_', Just (Tuple body rest) <- upTo [ cp '_' ] tail, not (null body) -> cons (Italic (inlines (str body))) (go rest)
-      | c == cp '['
-      , Just (Tuple label afterLabel) <- upTo [ cp ']' ] tail
-      , Just { head: p, tail: afterParen } <- uncons afterLabel
-      , p == cp '('
-      , Just (Tuple url rest) <- upTo [ cp ')' ] afterParen -> cons (Link { text: str label, url: str url }) (go rest)
-      | c == cp '@', name <- takeWhile isName tail, not (null name) -> cons (Mention (str name)) (go (drop (Array.length name) tail))
-      | Just (Tuple url rest) <- bareUrl cps -> cons (Link { text: str url, url: str url }) (go rest)
-      | otherwise -> cons (Text (str [ c ])) (go tail)
+  go input = Array.reverse $ tailRec step { rest: input, acc: [] }
+    where
+    step state = case uncons state.rest of
+      Nothing -> Done state.acc
+      Just { head: c, tail }
+        | c == cp '`', Just (Tuple body rest) <- upTo [ cp '`' ] tail ->
+            Loop { rest, acc: cons (InlineCode (str body)) state.acc }
+        | c == cp '*', Just { head: c2, tail: t2 } <- uncons tail, c2 == cp '*', Just (Tuple body rest) <- upTo [ cp '*', cp '*' ] t2 ->
+            Loop { rest, acc: cons (Bold (inlines (str body))) state.acc }
+        | c == cp '*', Just (Tuple body rest) <- upTo [ cp '*' ] tail, not (null body) ->
+            Loop { rest, acc: cons (Italic (inlines (str body))) state.acc }
+        | c == cp '_', Just (Tuple body rest) <- upTo [ cp '_' ] tail, not (null body) ->
+            Loop { rest, acc: cons (Italic (inlines (str body))) state.acc }
+        | c == cp '['
+        , Just (Tuple label afterLabel) <- upTo [ cp ']' ] tail
+        , Just { head: p, tail: afterParen } <- uncons afterLabel
+        , p == cp '('
+        , Just (Tuple url rest) <- upTo [ cp ')' ] afterParen ->
+            Loop { rest, acc: cons (Link { text: str label, url: str url }) state.acc }
+        | c == cp '@', name <- takeWhile isName tail, not (null name) ->
+            Loop { rest: drop (Array.length name) tail, acc: cons (Mention (str name)) state.acc }
+        | Just (Tuple url rest) <- bareUrl state.rest ->
+            Loop { rest, acc: cons (Link { text: str url, url: str url }) state.acc }
+        | otherwise -> Loop { rest: tail, acc: cons (Text (str [ c ])) state.acc }
 
   -- Adjacent text runs become one.
-  merge = Array.foldr step []
+  merge = Array.reverse <<< Array.foldl step []
     where
-    step (Text a) acc | Just { head: Text b, tail } <- uncons acc = cons (Text (a <> b)) tail
-    step x acc = cons x acc
+    step acc (Text text) | Just { head: Text previous, tail } <- uncons acc = cons (Text (previous <> text)) tail
+    step acc inline = cons inline acc
 
   upTo :: Array CodePoint -> Array CodePoint -> Maybe (Tuple (Array CodePoint) (Array CodePoint))
-  upTo close = search []
+  upTo close input = tailRec search { acc: [], rest: input }
     where
     n = Array.length close
-    search acc rest
-      | Array.take n rest == close = Just (Tuple acc (drop n rest))
-      | otherwise = case uncons rest of
-          Just { head, tail } | head /= cp '\n' -> search (snoc acc head) tail
-          _ -> Nothing
+    search state
+      | Array.take n state.rest == close = Done $ Just $ Tuple (Array.reverse state.acc) (drop n state.rest)
+      | otherwise = case uncons state.rest of
+          Just { head, tail } | head /= cp '\n' -> Loop { acc: cons head state.acc, rest: tail }
+          _ -> Done Nothing
 
   bareUrl cps =
     let

@@ -2,6 +2,9 @@ module Test.Markdown.Main where
 
 import Prelude
 
+import Data.Array as Array
+import Data.String (joinWith)
+import Data.String.CodeUnits as CodeUnits
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
@@ -23,6 +26,14 @@ main = launchAff_ do
         , Code (Just "purs") "main = 1"
         ]
       && Markdown.mentions "@ann and @ann, cc @bob but not a@b.c" == [ "ann", "bob", "b.c" ]
+
+  check "maximum chat-sized inputs do not exhaust the stack" do
+    let long = CodeUnits.fromCharArray $ Array.replicate 4000 'x'
+    let unclosed = "*" <> long
+    let manyLines = joinWith "\n" $ Array.replicate 2000 "x"
+    pure $ Markdown.plain long == long
+      && Markdown.plain unclosed == unclosed
+      && Markdown.plain manyLines == manyLines
 
   log "All markdown tests passed."
 
