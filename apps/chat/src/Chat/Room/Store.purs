@@ -1,9 +1,12 @@
 module Chat.Room.Store
   ( Store
+  , assistantReply
   , find
+  , findAssistantReply
   , hasMessage
   , open
   , post
+  , postWith
   , react
   , snapshot
   ) where
@@ -69,14 +72,44 @@ hasMessage store id = find store id <#> case _ of
   Nothing -> false
 
 post :: Store -> NewMessage -> Runtime Message
-post store@(Store state) message = do
+post store = postWith store []
+
+postWith :: Store -> Array Command -> NewMessage -> Runtime Message
+postWith store@(Store state) extra message = do
   sentAt <- unwrap <<< unInstant <$> Alarm.now state
   let
     commands =
       Array.mapWithIndex (\position imageId -> Sql.command insertImageLink { imageId, position }) message.images
+        <> extra
         <> retentionCommands
   id <- Sql.batchOne state insertMessage { message, sentAt } commands
   find store id >>= maybe (platformError "room post" "inserted message is missing") pure
+
+findAssistantReply :: Store -> Int -> Runtime (Maybe Message)
+findAssistantReply store@(Store state) trigger =
+  Sql.first state selectAssistantReplyId trigger >>= case _ of
+    Nothing -> pure Nothing
+    Just id -> find store id
+
+assistantReply
+  :: Store
+  -> { trigger :: Int, text :: String, status :: String, failure :: Maybe String }
+  -> Runtime Message
+assistantReply store@(Store state) result = findAssistantReply store result.trigger >>= case _ of
+  Just existing -> pure existing
+  Nothing -> do
+    sentAt <- unwrap <<< unInstant <$> Alarm.now state
+    let
+      finish = Sql.command finishAssistantJob
+        { trigger: result.trigger
+        , status: result.status
+        , failure: result.failure
+        , updatedAt: sentAt
+        }
+    id <- Sql.batchOne state insertAssistantMessage
+      { trigger: result.trigger, text: result.text, sentAt }
+      ([ finish ] <> retentionCommands)
+    find store id >>= maybe (platformError "assistant reply" "inserted reply is missing") pure
 
 react :: Store -> { id :: Int, emoji :: String, by :: String } -> Runtime (Maybe Message)
 react store@(Store state) reaction = find store reaction.id >>= case _ of
@@ -174,6 +207,36 @@ insertMessage = Sql.statement
   )
   (Sql.columnOf "id")
 
+selectAssistantReplyId :: Statement Int Int
+selectAssistantReplyId = Sql.statement
+  "SELECT id FROM messages WHERE assistant_trigger = ?"
+  Sql.paramOf
+  (Sql.columnOf "id")
+
+insertAssistantMessage :: Statement { trigger :: Int, text :: String, sentAt :: Number } Int
+insertAssistantMessage = Sql.statement
+  "INSERT INTO messages (author_kind, author_name, text, reply_to, sent_at, assistant_trigger) VALUES ('assistant', '', ?, ?, ?, ?) RETURNING id"
+  ( Op \reply ->
+      [ CA.encode CA.string reply.text
+      , CA.encode CA.int reply.trigger
+      , CA.encode CA.number reply.sentAt
+      , CA.encode CA.int reply.trigger
+      ]
+  )
+  (Sql.columnOf "id")
+
+finishAssistantJob :: Statement { trigger :: Int, status :: String, failure :: Maybe String, updatedAt :: Number } Unit
+finishAssistantJob = Sql.statement
+  "UPDATE assistant_jobs SET status = ?, reply_id = (SELECT MAX(id) FROM messages), failure = ?, updated_at = ? WHERE trigger = ?"
+  ( Op \job ->
+      [ CA.encode CA.string job.status
+      , CA.encode (Compat.maybe CA.string) job.failure
+      , CA.encode CA.number job.updatedAt
+      , CA.encode CA.int job.trigger
+      ]
+  )
+  (pure unit)
+
 insertImageLink :: Statement { imageId :: Int, position :: Int } Unit
 insertImageLink = Sql.statement
   "INSERT INTO message_images (message_id, image_id, position) VALUES ((SELECT MAX(id) FROM messages), ?, ?)"
@@ -206,6 +269,7 @@ retentionCommands =
   [ Sql.command deleteExpiredImages unit
   , Sql.command deleteExpiredImageLinks unit
   , Sql.command deleteExpiredReactions unit
+  , Sql.command deleteExpiredAssistantJobs unit
   , Sql.command deleteExpiredMessages unit
   ]
 
@@ -227,6 +291,12 @@ deleteExpiredImageLinks = Sql.statement
 deleteExpiredReactions :: Statement Unit Unit
 deleteExpiredReactions = Sql.statement
   ("DELETE FROM reactions WHERE message_id IN (" <> expiredMessages <> ")")
+  Sql.noParams
+  (pure unit)
+
+deleteExpiredAssistantJobs :: Statement Unit Unit
+deleteExpiredAssistantJobs = Sql.statement
+  ("DELETE FROM assistant_jobs WHERE trigger IN (" <> expiredMessages <> ")")
   Sql.noParams
   (pure unit)
 

@@ -10,7 +10,7 @@ import Cloudflare.Durable (Runtime, State)
 import Cloudflare.Durable.Sql (Command, Statement)
 import Cloudflare.Durable.Sql as Sql
 import Cloudflare.Durable.Storage as Storage
-import Data.Array (concatMap, mapWithIndex, null)
+import Data.Array (any, concatMap, mapWithIndex, null)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Compat as Compat
 import Data.Maybe (Maybe(..))
@@ -34,10 +34,15 @@ legacyKey = Storage.key "messages"
 initialize :: State -> Runtime Unit
 initialize state = do
   Sql.execute state createMessages unit
+  columns <- Sql.query state messageColumns unit
+  unless (any (_ == "assistant_trigger") columns) $ Sql.execute state addAssistantTrigger unit
+  Sql.execute state createAssistantTriggerIndex unit
   Sql.execute state createMessageImages unit
   Sql.execute state createReactions unit
+  Sql.execute state createAssistantJobs unit
   Sql.execute state createMessageImagesIndex unit
   Sql.execute state createReactionsIndex unit
+  Sql.execute state createAssistantJobsIndex unit
   count <- Sql.one state countMessages unit
   if count > 0 then deleteLegacyKeys state
   else Storage.get state messagesKey >>= case _ of
@@ -80,7 +85,19 @@ deleteLegacyKeys state = do
 
 createMessages :: Statement Unit Unit
 createMessages = Sql.statement
-  "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, author_kind TEXT NOT NULL CHECK (author_kind IN ('human', 'assistant')), author_name TEXT NOT NULL, text TEXT NOT NULL, reply_to INTEGER, sent_at REAL NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, author_kind TEXT NOT NULL CHECK (author_kind IN ('human', 'assistant')), author_name TEXT NOT NULL, text TEXT NOT NULL, reply_to INTEGER, sent_at REAL NOT NULL, assistant_trigger INTEGER)"
+  Sql.noParams
+  (pure unit)
+
+messageColumns :: Statement Unit String
+messageColumns = Sql.statement "PRAGMA table_info(messages)" Sql.noParams (Sql.columnOf "name")
+
+addAssistantTrigger :: Statement Unit Unit
+addAssistantTrigger = Sql.statement "ALTER TABLE messages ADD COLUMN assistant_trigger INTEGER" Sql.noParams (pure unit)
+
+createAssistantTriggerIndex :: Statement Unit Unit
+createAssistantTriggerIndex = Sql.statement
+  "CREATE UNIQUE INDEX IF NOT EXISTS messages_assistant_trigger ON messages (assistant_trigger) WHERE assistant_trigger IS NOT NULL"
   Sql.noParams
   (pure unit)
 
@@ -96,6 +113,12 @@ createReactions = Sql.statement
   Sql.noParams
   (pure unit)
 
+createAssistantJobs :: Statement Unit Unit
+createAssistantJobs = Sql.statement
+  "CREATE TABLE IF NOT EXISTS assistant_jobs (trigger INTEGER PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed')), attempts INTEGER NOT NULL DEFAULT 0, reply_id INTEGER UNIQUE, failure TEXT, updated_at REAL NOT NULL)"
+  Sql.noParams
+  (pure unit)
+
 createMessageImagesIndex :: Statement Unit Unit
 createMessageImagesIndex = Sql.statement
   "CREATE INDEX IF NOT EXISTS message_images_image_id ON message_images (image_id)"
@@ -105,6 +128,12 @@ createMessageImagesIndex = Sql.statement
 createReactionsIndex :: Statement Unit Unit
 createReactionsIndex = Sql.statement
   "CREATE INDEX IF NOT EXISTS reactions_message_id ON reactions (message_id)"
+  Sql.noParams
+  (pure unit)
+
+createAssistantJobsIndex :: Statement Unit Unit
+createAssistantJobsIndex = Sql.statement
+  "CREATE INDEX IF NOT EXISTS assistant_jobs_status_trigger ON assistant_jobs (status, trigger DESC)"
   Sql.noParams
   (pure unit)
 

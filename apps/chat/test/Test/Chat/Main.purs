@@ -191,6 +191,58 @@ main = launchAff_ do
     Simulator.advance timeline (Milliseconds 0.0)
     snapshot <- Rpc.run $ chat.snapshot unit
     pure $ map (map _.replyTo <<< _.messages) snapshot == Right [ Nothing, Nothing, Just 2 ]
+  check "assistant retries transient failures and emits one reply" do
+    attempts <- liftEffect $ Ref.new 0
+    let
+      flaky = Model.Model \_ -> do
+        attempt <- liftEffect do
+          current <- Ref.read attempts
+          Ref.write (current + 1) attempts
+          pure $ current + 1
+        pure
+          if attempt == 1 then Left $ Model.Transport "private provider detail"
+          else Right { message: Assistant { text: Just "recovered", toolCalls: [] }, finish: Stop, usage: Nothing }
+    retryRooms <- Simulator.simulateWith
+      (Simulator.noContainer { variables = Map.singleton "DEEPSEEK_API_KEY" "test-key" })
+      timeline
+      (roomLiveWith \_ -> flaky)
+    id <- Durable.newUniqueId retryRooms
+    let chat = Durable.get retryRooms id
+    _ <- Rpc.run $ chat.post { author: "ann", text: "retry this @ai", images: [], replyTo: Nothing }
+    Simulator.advance timeline (Milliseconds 0.0)
+    beforeRetry <- Rpc.run $ chat.snapshot unit
+    Simulator.advance timeline (Milliseconds 1000.0)
+    afterRetry <- Rpc.run $ chat.snapshot unit
+    Simulator.advance timeline (Milliseconds 32000.0)
+    afterExtraAlarm <- Rpc.run $ chat.snapshot unit
+    attempted <- liftEffect $ Ref.read attempts
+    pure
+      $ map (map _.text <<< _.messages) beforeRetry == Right [ "retry this @ai" ]
+          && map (map _.text <<< _.messages) afterRetry == Right [ "retry this @ai", "recovered" ]
+          && map (map _.text <<< _.messages) afterExtraAlarm == Right [ "retry this @ai", "recovered" ]
+          && attempted == 2
+
+  check "assistant failures hide provider details and do not retry permanent errors" do
+    attempts <- liftEffect $ Ref.new 0
+    let
+      denied = Model.Model \_ -> do
+        liftEffect $ Ref.modify_ (_ + 1) attempts
+        pure $ Left $ Model.Rejected { status: 401, body: "private provider detail" }
+    deniedRooms <- Simulator.simulateWith
+      (Simulator.noContainer { variables = Map.singleton "DEEPSEEK_API_KEY" "test-key" })
+      timeline
+      (roomLiveWith \_ -> denied)
+    id <- Durable.newUniqueId deniedRooms
+    let chat = Durable.get deniedRooms id
+    _ <- Rpc.run $ chat.post { author: "ann", text: "answer @ai", images: [], replyTo: Nothing }
+    Simulator.advance timeline (Milliseconds 0.0)
+    Simulator.advance timeline (Milliseconds 32000.0)
+    snapshot <- Rpc.run $ chat.snapshot unit
+    attempted <- liftEffect $ Ref.read attempts
+    pure
+      $ map (map _.text <<< _.messages) snapshot == Right [ "answer @ai", "I could not answer right now." ]
+          && map (map _.replyTo <<< _.messages) snapshot == Right [ Nothing, Just 1 ]
+          && attempted == 1
 
   check "replies must point at a real message; mentions are recorded" do
     let chat = Durable.getByName rooms "threads"
