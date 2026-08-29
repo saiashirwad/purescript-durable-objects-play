@@ -10,11 +10,11 @@ module Chat.Page.Messages
 
 import Prelude
 
-import Chat.Client (RoomId)
 import Chat.Page.Browser (TimeFormatter)
 import Chat.Page.Icons (replyIcon)
-import Chat.Page.Shared (avatar, imageUrl, quiet)
+import Chat.Page.Shared (avatar, quiet)
 import Chat.Room (Message, MessageId, isAssistant, printAuthor, printMessageId)
+import Chat.Session (RoomSession)
 import Chat.Style (styles)
 import Data.Array (elem, length, zip)
 import Data.Array as Array
@@ -43,7 +43,7 @@ type Actions action =
   }
 
 type MessageRoom row =
-  { id :: RoomId
+  { session :: RoomSession
   , messages :: Map.Map MessageId Message
   | row
   }
@@ -108,8 +108,8 @@ messageItem actions formatTime author room (Tuple position message) =
       ]
 
   image n =
-    HH.a [ css styles.imageLink, HP.href (imageUrl room.id n), HP.target "_blank", HP.rel "noopener noreferrer" ]
-      [ HH.img [ css styles.image, HP.src (imageUrl room.id n), HP.alt $ authorName <> " attached an image" ] ]
+    HH.a [ css styles.imageLink, HP.href (room.session.imageUrl n), HP.target "_blank", HP.rel "noopener noreferrer" ]
+      [ HH.img [ css styles.image, HP.src (room.session.imageUrl n), HP.alt $ authorName <> " attached an image" ] ]
 
   reactions
     | Array.null message.reactions = HH.text ""

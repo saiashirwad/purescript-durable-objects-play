@@ -1,19 +1,15 @@
--- | Vocabulary the page slices share: string predicates, button presets,
--- | avatars, and the image URLs the room's fetch hook serves.
+-- | Vocabulary the page slices share: string predicates, button presets, and
+-- | avatars.
 module Chat.Page.Shared
   ( avatar
   , blank
-  , imageEndpoint
-  , imageUrl
   , quiet
   , small
   ) where
 
 import Prelude
 
-import Chat.Client (RoomId)
-import Chat.Client as Chat
-import Chat.Room (ImageId, assistantName, printImageId)
+import Chat.Room (assistantName)
 import Data.String (null, trim)
 import Data.String as String
 import Halogen.HTML as HH
@@ -40,9 +36,3 @@ avatar extra name = Avatar.avatar
   , styles: extra
   }
 
--- | The room's fetch hook serves uploaded images by id.
-imageEndpoint :: RoomId -> String
-imageEndpoint id = "/rpc/Room/id/" <> Chat.printRoomId id <> "/http/image"
-
-imageUrl :: RoomId -> ImageId -> String
-imageUrl id image = imageEndpoint id <> "/" <> show (printImageId image)

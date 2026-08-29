@@ -9,8 +9,8 @@ module Chat.Page.Session
 
 import Prelude
 
-import Chat.Client (RoomId)
-import Chat.Client as Chat
+import Chat.Session (RoomId)
+import Chat.Session as Session
 import Chat.Page.Browser (NotificationPermission(..), localStorage, location, notificationPermission, requestNotifications)
 import Chat.Page.Room as Room
 import Chat.Room (describeUserNameError, mkUserName, printUserName)
@@ -18,15 +18,12 @@ import Chat.Page.Shared (blank)
 import Chat.Page.Types (App, Joining, Lobby, Locked, SessionAction(..), View(..))
 import Chat.Style (styles)
 import Control.Monad.Error.Class (catchError)
-import Data.Argonaut.Core as J
 import Data.Either (Either(..), either)
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
-import Data.String (drop, trim)
-import Effect.Aff (Aff, attempt)
+import Data.String (trim)
+import Effect.Aff (attempt)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Effect.Class (liftEffect)
-import Fetch (Method(..), fetch)
-import Foreign.Object as Object
 import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
@@ -39,22 +36,6 @@ import UI.Style (css)
 import Web.Event.Event (preventDefault)
 import Web.HTML.Location as Location
 import Web.Storage.Storage as Storage
-
--- | 204 when this browser already holds a session cookie.
-sessionStatus :: Aff Int
-sessionStatus = _.status <$> fetch "/session" {}
-
--- | The session endpoints answer 204 when allowed.
-admitted :: Int -> Boolean
-admitted status = status == 204
-
--- | 204 when the passkey is right.
-login :: String -> Aff Int
-login passkey = _.status <$> fetch "/login"
-  { method: POST
-  , headers: { "content-type": "application/json" }
-  , body: J.stringify $ J.fromObject $ Object.singleton "passkey" $ J.fromString passkey
-  }
 
 primary :: Button.Options
 primary = Button.defaults { tone = Accent, styles = styles.wide }
@@ -119,10 +100,10 @@ handle = case _ of
     let author = either (const "") printUserName $ mkUserName stored
     notifications <- liftEffect notificationPermission
     H.modify_ _ { author = author, notifications = notifications }
-    outcome <- liftAff $ attempt sessionStatus
+    outcome <- liftAff $ attempt Session.sessionStatus
     case outcome of
       Left _ -> H.modify_ _ { view = LoadFailed "Could not check the session." } $> Nothing
-      Right status | admitted status -> roomFromUrl
+      Right status | Session.admitted status -> roomFromUrl
       Right _ -> H.modify_ _ { view = Locked { passkey: "", error: Nothing, busy: false } } $> Nothing
   SetPasskey passkey ->
     modifyLocked (_ { passkey = passkey, error = Nothing }) $> Nothing
@@ -132,10 +113,10 @@ handle = case _ of
     result <- case state.view of
       Locked locked -> do
         modifyLocked _ { busy = true }
-        outcome <- liftAff $ attempt $ login $ trim locked.passkey
+        outcome <- liftAff $ attempt $ Session.loginStatus $ trim locked.passkey
         case outcome of
           Left _ -> modifyLocked (_ { busy = false, error = Just "Could not check the passkey." }) $> Nothing
-          Right status | admitted status -> H.modify_ _ { view = Lobby { busy: false, error: Nothing } } *> roomFromUrl
+          Right status | Session.admitted status -> H.modify_ _ { view = Lobby { busy: false, error: Nothing } } *> roomFromUrl
           Right 401 -> modifyLocked (_ { busy = false, error = Just "That passkey is not right." }) $> Nothing
           Right 403 -> modifyLocked (_ { busy = false, error = Just "That passkey is not right." }) $> Nothing
           Right _ -> modifyLocked (_ { busy = false, error = Just "The session service is not available." }) $> Nothing
@@ -146,7 +127,7 @@ handle = case _ of
     case state.view of
       Lobby lobby | not lobby.busy -> do
         modifyLobby _ { busy = true, error = Nothing }
-        outcome <- liftAff $ attempt $ Chat.create Chat.rpc
+        outcome <- liftAff $ attempt Session.create
         case outcome of
           Left _ -> modifyLobby (_ { busy = false, error = Just "Could not create a room." }) $> Nothing
           Right id -> pure $ Just id
@@ -166,7 +147,7 @@ handle = case _ of
       _ -> pure Nothing
   ChangeName -> do
     author <- H.gets _.author
-    Room.leaveRoom \room -> Joining { id: room.id, name: author, error: Nothing }
+    Room.leaveRoom \room -> Joining { id: room.session.id, name: author, error: Nothing }
     pure Nothing
   EnableNotifications -> do
     outcome <- liftAff $ catchError requestNotifications (const $ pure Unsupported)
@@ -175,8 +156,8 @@ handle = case _ of
 
 roomFromUrl :: forall m. MonadAff m => App m (Maybe RoomId)
 roomFromUrl = do
-  fragment <- liftEffect $ drop 1 <$> (Location.hash =<< location)
-  case Chat.parseRoomId Chat.rpc fragment of
+  fragment <- liftEffect $ Location.hash =<< location
+  case Session.fromRoute fragment of
     Just id -> pure $ Just id
     Nothing -> H.modify_ _ { view = Lobby { busy: false, error: Nothing } } $> Nothing
 

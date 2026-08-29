@@ -10,16 +10,15 @@ module Chat.Page.Room
 
 import Prelude
 
-import Chat.Client (RoomId)
-import Chat.Client as Chat
+import Chat.Session (RoomId)
+import Chat.Session as Session
 import Chat.Page.Browser (NotificationPermission(..), away, copyText, interval, location, nearBottom, notify, nowMs, scrollToEnd, scrollToId, setTitle)
 import Chat.Page.Icons (bellIcon, linkIcon)
 import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (Action(..), App, ComposerStatus(..), RoomAction(..), RoomToken, RoomView, View(..), advanceRoomToken, modifyRoomAt, withRoom)
-import Chat.Room (Message, MessageId, RoomEvents, describeReactError, printAuthor, printMessageId)
+import Chat.Room (Message, MessageId, RoomEvents, printAuthor, printMessageId)
 import Chat.Style (styles)
 import Cloudflare.Durable (Signal(..))
-import Cloudflare.Durable.Rpc as Rpc
 import Data.Array (elem, length, mapWithIndex, replicate)
 import Data.Array as Array
 import Data.Either (either)
@@ -79,7 +78,7 @@ roomTitle actions { notifications } room =
   HH.div [ css styles.headerGroup ] $
     [ HH.span [ css $ styles.presence <> guard room.online styles.online, ARIA.hidden "true" ] []
     , HH.h1 [ css styles.roomName ] [ HH.text "Room" ]
-    , HH.code [ css styles.roomId, HP.title (Chat.printRoomId room.id) ] [ HH.text $ shortId room.id ]
+    , HH.code [ css styles.roomId, HP.title (Session.printRoomId room.session.id) ] [ HH.text $ shortId room.session.id ]
     , HH.span [ css styles.count, ARIA.role "status", ARIA.live "polite" ] [ HH.text $ onlineLabel room ]
     , Button.button small [ HE.onClick \_ -> actions.copyLink ]
         [ Icon.render linkIcon, HH.text if room.copied then "Copied" else "Copy link" ]
@@ -134,9 +133,9 @@ handle = case _ of
   JumpTo id -> liftEffect $ scrollToId $ "msg-" <> show (printMessageId id)
   React id emoji -> withRoom \room -> do
     { author } <- H.get
-    outcome <- liftAff $ Rpc.run $ room.api.react { id, emoji, by: author }
+    outcome <- liftAff $ room.session.react { id, emoji, by: author }
     either
-      (\failure -> modifyRoomAt room.token _ { error = Just $ Chat.describeFailure describeReactError failure })
+      (\failure -> modifyRoomAt room.token _ { error = Just failure })
       (\message -> modifyRoomAt room.token \view -> view { messages = Map.insert message.id message view.messages })
       outcome
   Tick token -> tick token
@@ -144,20 +143,20 @@ handle = case _ of
 
 enter :: forall m. MonadAff m => RoomId -> App m Unit
 enter id = do
-  liftEffect $ Location.setHash (Chat.printRoomId id) =<< location
+  liftEffect $ Location.setHash (Session.route id) =<< location
   state <- H.get
   if blank state.author then H.modify_ _ { view = Joining { id, name: "", error: Nothing } }
   else do
     let token = state.nextRoomToken
     H.modify_ _ { nextRoomToken = advanceRoomToken token }
     shareUrl <- liftEffect $ Location.href =<< location
-    feed <- H.subscribe $ (Room <<< Notified token) <$> Chat.listen Chat.rpc id state.author
+    let session = Session.open id
+    feed <- H.subscribe $ (Room <<< Notified token) <$> session.listen state.author
     ticker <- H.subscribe $ Room (Tick token) <$ makeEmitter (interval 1000)
     H.modify_ _
       { view = InRoom
           { token
-          , id
-          , api: Chat.open Chat.rpc id
+          , session
           , shareUrl
           , composer:
               { draft: ""
@@ -228,15 +227,15 @@ announce token message mentioned = do
       when (state.notifications == Granted) $ notify
         { title: (if mentioned then "@" <> state.author <> " · " else "") <> printAuthor message.author
         , body: String.take 200 (Markdown.plain message.text)
-        , tag: "room-" <> Chat.printRoomId room.id
+        , tag: "room-" <> Session.printRoomId room.session.id
         }
 
 reload :: forall m. MonadAff m => RoomToken -> App m Unit
 reload token = withRoomAt token \room -> do
   pinned <- withMessages nearBottom
-  outcome <- liftAff $ Rpc.run $ room.api.snapshot unit
+  outcome <- liftAff room.session.snapshot
   either
-    (\failure -> modifyRoomAt token _ { error = Just $ Chat.describeFailure absurd failure })
+    (\failure -> modifyRoomAt token _ { error = Just failure })
     ( \snapshot -> do
         modifyRoomAt token \current -> current
           { messages = Map.union current.messages (byId snapshot.messages)
@@ -273,7 +272,7 @@ byId = Map.fromFoldable <<< map \message -> Tuple message.id message
 shortId :: RoomId -> String
 shortId id = String.take 6 printed <> "…" <> String.drop (String.length printed - 4) printed
   where
-  printed = Chat.printRoomId id
+  printed = Session.printRoomId id
 
 typingTtl :: Number
 typingTtl = 3500.0

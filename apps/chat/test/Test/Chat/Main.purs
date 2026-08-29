@@ -10,6 +10,7 @@ import Chat.Room.Images as Images
 import Chat.Room.Migrations (LegacyMessage)
 import Chat.Room.Store as Store
 import Chat.Room.Live (roomLive, roomLiveWith)
+import Chat.Session as BrowserSession
 import Chat.Page.Composer as Composer
 import Chat.Page.Messages as Messages
 import Cloudflare.Durable (Object, Signal(..))
@@ -129,9 +130,14 @@ main = launchAff_ do
     id <- liftAff $ Durable.newUniqueId rooms
     let byId = Durable.get rooms id
     let byName = Durable.getByName rooms (Durable.idToString id)
+    let session = BrowserSession.open id
     _ <- byId.post { author: "ann", text: "only here", images: [], replyTo: Nothing }
     other <- Rpc.infallible $ byName.snapshot unit
-    pure $ length other.messages == 0 && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
+    pure
+      $ length other.messages == 0
+          && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
+          && BrowserSession.fromRoute (BrowserSession.route id) == Just id
+          && session.imageUrl (imageId 1) == "/rpc/Room/id/" <> BrowserSession.printRoomId id <> "/http/image/1"
 
   check "room migration imports legacy keys once and deletes both" do
     let current = (chatMessage 7 "ann" 7.0 Nothing) { text = "current", images = [ imageId 4 ], mentions = [], reactions = [ { emoji: "👍", by: [ "bob" ] } ] }

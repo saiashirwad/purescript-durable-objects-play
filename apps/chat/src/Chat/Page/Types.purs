@@ -22,9 +22,9 @@ module Chat.Page.Types
 
 import Prelude
 
-import Chat.Client (RoomId)
+import Chat.Session (RoomId, RoomSession)
 import Chat.Page.Browser (NotificationPermission, TimeFormatter)
-import Chat.Room (ImageId, Message, MessageId, RoomApi, RoomEvents)
+import Chat.Room (ImageId, Message, MessageId, RoomEvents)
 import Cloudflare.Durable (Signal)
 import Data.Map (Map)
 import Data.Maybe (Maybe)
@@ -77,8 +77,7 @@ type Joining = { id :: RoomId, name :: String, error :: Maybe String }
 
 type RoomView =
   { token :: RoomToken
-  , id :: RoomId
-  , api :: Record RoomApi
+  , session :: RoomSession
   , shareUrl :: String
   , composer :: ComposerState
   , messages :: Map MessageId Message

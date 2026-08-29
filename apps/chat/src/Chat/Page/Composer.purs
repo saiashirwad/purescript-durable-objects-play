@@ -10,14 +10,12 @@ module Chat.Page.Composer
 
 import Prelude
 
-import Chat.Client as Chat
 import Chat.Page.Browser (nowMs)
 import Chat.Page.Icons (imageIcon, replyIcon, sendIcon)
-import Chat.Page.Shared (avatar, blank, imageEndpoint, imageUrl, quiet, small)
+import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (App, ComposerAction(..), ComposerState, ComposerStatus(..), RoomToken, RoomView, modifyRoom, modifyRoomAt, withRoom)
-import Chat.Room (ImageId, Message, MessageId, assistantName, describePostError, printAuthor, printImageId)
+import Chat.Room (ImageId, Message, MessageId, assistantName, printAuthor, printImageId)
 import Chat.Style (styles)
-import Cloudflare.Durable.Rpc as Rpc
 import Control.Promise (Promise, toAffE)
 import Data.Array (filter, take)
 import Data.Array as Array
@@ -130,7 +128,7 @@ attachmentStrip room
           <> guard (room.composer.status == Uploading) [ HH.span [ css styles.uploading, ARIA.role "status" ] [ HH.text "Uploading an image…" ] ]
       where
       thumbnail n = HH.span [ css styles.attachment ]
-        [ HH.img [ css styles.thumbnail, HP.src (imageUrl room.id n), HP.alt "Image attachment preview" ]
+        [ HH.img [ css styles.thumbnail, HP.src (room.session.imageUrl n), HP.alt "Image attachment preview" ]
         , Button.iconButton ("Remove attachment " <> show (printImageId n)) (small { disabled = not (isEditing room), styles = styles.remove }) [ HE.onClick \_ -> Detach n ] [ HH.text "×" ]
         ]
 
@@ -176,11 +174,11 @@ handle = case _ of
       let files = FileList.items list
       unless (Array.null files) do
         liftEffect $ preventDefault $ Clipboard.toEvent event
-        upload room.token $ uploadFiles (imageEndpoint room.id) files
+        upload room.token $ uploadFiles room.session.imageEndpoint files
   Attach -> whileEditing \_ -> H.getHTMLElementRef fileRef >>= traverse_ (liftEffect <<< click)
   SelectedFiles files -> whileEditing \room -> unless (Array.null files) do
     resetFileInput
-    upload room.token $ uploadFiles (imageEndpoint room.id) files
+    upload room.token $ uploadFiles room.session.imageEndpoint files
   Detach n -> whileEditing \_ -> modifyComposer \composerState -> composerState { attachments = filter (_ /= n) composerState.attachments }
   Reply target -> whileEditing \_ -> modifyComposer (_ { replyTo = target }) *> focusComposer
   Submit event -> liftEffect (preventDefault event) *> submit
@@ -194,7 +192,7 @@ submit = whileEditing \room -> when (sendable room) do
     if isEditing current then
       (mapComposer (_ { status = Sending }) current) { error = Nothing }
     else current
-  outcome <- liftAff $ Rpc.run $ room.api.post
+  outcome <- liftAff $ room.session.post
     { author
     , text: composerState.draft
     , images: composerState.attachments
@@ -205,7 +203,7 @@ submit = whileEditing \room -> when (sendable room) do
       if latest.composer.status /= Sending then latest
       else case outcome of
         Right _ -> mapComposer (_ { draft = "", attachments = [], replyTo = Nothing, status = Editing }) latest
-        Left failure -> (mapComposer (_ { status = Editing }) latest) { error = Just $ Chat.describeFailure describePostError failure }
+        Left failure -> (mapComposer (_ { status = Editing }) latest) { error = Just failure }
     focusComposer
 
 pingTyping :: forall m. MonadAff m => App m Unit
@@ -214,7 +212,7 @@ pingTyping = withRoom \room -> unless (blank room.composer.draft) do
   when (at - room.typingSentAt > typingThrottle) do
     modifyRoomAt room.token _ { typingSentAt = at }
     { author } <- H.get
-    void $ liftAff $ Rpc.run $ room.api.typing author
+    liftAff $ room.session.typing author
 
 upload :: forall m. MonadAff m => RoomToken -> Effect (Promise (Array ImageId)) -> App m Unit
 upload token go = do
