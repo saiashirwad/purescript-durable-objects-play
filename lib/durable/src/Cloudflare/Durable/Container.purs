@@ -36,12 +36,12 @@ import Prelude
 import Cloudflare.Durable.Alarm as Alarm
 import Cloudflare.Durable.Init (Image, InstanceType(..))
 import Cloudflare.Durable.Init (Image, InstanceType(..)) as Exports
-import Cloudflare.Durable.Runtime (Exit(..), Launch) as Exports
 import Cloudflare.Durable.Runtime (class MonadRuntime, Exit, Launch(..), RawContainer, State, liftRuntime, platform, platformError)
+import Cloudflare.Durable.Runtime (Exit(..), Launch) as Exports
 import Cloudflare.Durable.Storage as Storage
 import Cloudflare.Worker (Request, Response)
 import Control.Monad.Rec.Class (Step(..), tailRecM)
-import Data.DateTime.Instant (unInstant)
+import Data.DateTime.Instant (Instant, unInstant)
 import Data.Map (Map, SemigroupMap(..))
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
@@ -87,34 +87,39 @@ internet (Launch l) = unwrap l.internet
 
 -- Lifecycle -----------------------------------------------------------------
 
+call :: forall m a. MonadRuntime m => String -> Aff a -> m a
+call name = liftRuntime <<< platform name
+
 running :: forall m. MonadRuntime m => Container -> m Boolean
-running (Container c) = liftRuntime $ platform "container.running" c.running
+running (Container c) = call "container.running" c.running
 
 start :: forall m. MonadRuntime m => Container -> Launch -> m Unit
-start (Container c) launch = liftRuntime $ platform "container.start" $ c.start launch
+start (Container c) launch = call "container.start" $ c.start launch
 
 -- | Start the container if it is not running, then wait until `port`
--- | answers. Polls four times a second for up to thirty seconds. A running
--- | container is left alone.
+-- | answers. A running container is left alone.
 ensure :: forall m. MonadRuntime m => Container -> Port -> Launch -> m Unit
 ensure box@(Container c) port launch = do
   up <- running box
   unless up do
     start box launch
-    ready <- liftRuntime $ platform "container.ensure" $ tailRecM poll 120
+    ready <- call "container.ensure" $ tailRecM poll tries
     unless ready $ liftRuntime $ platformError "container.ensure" $ "port " <> show port <> " never answered"
   where
+  tries = 120
+  tick = Milliseconds 250.0
+
   poll :: Int -> Aff (Step Int Boolean)
   poll 0 = pure $ Done false
-  poll tries = do
+  poll left = do
     listening <- c.probe port
-    alive <- c.running
     if listening then pure $ Done true
-    else if not alive then pure $ Done false
-    else delay (Milliseconds 250.0) $> Loop (tries - 1)
+    else do
+      alive <- c.running
+      if alive then delay tick $> Loop (left - 1) else pure $ Done false
 
 request :: forall m. MonadRuntime m => Container -> Port -> Request -> m Response
-request (Container c) port req = liftRuntime $ platform ("container.request " <> show port) $ c.request port req
+request (Container c) port req = call ("container.request " <> show port) $ c.request port req
 
 -- | The process in the image is PID 1, which ignores `Terminate` and
 -- | `Interrupt` unless it installs a handler; `Kill` always works.
@@ -122,36 +127,44 @@ data Stop = Terminate | Interrupt | Kill
 
 derive instance eqStop :: Eq Stop
 
-stop :: forall m. MonadRuntime m => Container -> Stop -> m Unit
-stop (Container c) how = liftRuntime $ platform "container.stop" $ c.signal case how of
+signal :: Stop -> Int
+signal = case _ of
   Terminate -> 15
   Interrupt -> 2
   Kill -> 9
 
+stop :: forall m. MonadRuntime m => Container -> Stop -> m Unit
+stop (Container c) how = call "container.stop" $ c.signal $ signal how
+
 destroy :: forall m. MonadRuntime m => Container -> m Unit
-destroy (Container c) = liftRuntime $ platform "container.destroy" c.destroy
+destroy (Container c) = call "container.destroy" c.destroy
 
 -- | Block until the container exits.
 awaitExit :: forall m. MonadRuntime m => Container -> m Exit
-awaitExit (Container c) = liftRuntime $ platform "container.exit" c.exit
+awaitExit (Container c) = call "container.exit" c.exit
 
 -- Idle timeout: `renew` on use, `expire` from the alarm -----------------------
 
 sleepAtKey :: Storage.Key Number
 sleepAtKey = Storage.key "container.sleepAt"
 
+millis :: Instant -> Number
+millis = unwrap <<< unInstant
+
 -- | Keep the container for `idle` more; call on every use. Sets the alarm.
 renew :: forall m d. MonadRuntime m => Duration d => State -> Container -> d -> m Unit
 renew state _ idle = do
-  now <- Alarm.now state
-  Storage.put state sleepAtKey $ unwrap (unInstant now) + unwrap (fromDuration idle)
-  Alarm.scheduleIn state (fromDuration idle)
+  now <- millis <$> Alarm.now state
+  Storage.put state sleepAtKey $ now + unwrap wait
+  Alarm.scheduleIn state wait
+  where
+  wait = fromDuration idle
 
 -- | The alarm half of `renew`: stop the container if its time is up,
 -- | otherwise wait for the rest of it. Use as the object's `alarm`.
 expire :: forall m. MonadRuntime m => State -> Container -> m Unit
 expire state box = do
-  now <- unwrap <<< unInstant <$> Alarm.now state
+  now <- millis <$> Alarm.now state
   Storage.get state sleepAtKey >>= case _ of
     Just at | at <= now -> do
       up <- running box

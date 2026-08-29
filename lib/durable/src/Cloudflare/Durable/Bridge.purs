@@ -10,12 +10,11 @@ import Prelude
 
 import Cloudflare.Durable.Core (Live, activate, manifest)
 import Cloudflare.Durable.Platform (containerFromContext, socketsFromContext, stateFromContext, variablesFrom)
-import Cloudflare.Worker (Request, Response)
 import Cloudflare.Durable.Runtime (Socket)
+import Cloudflare.Worker (Request, Response)
 import Control.Promise (Promise, fromAff)
 import Data.Argonaut.Core (Json)
 import Data.Function.Uncurried (Fn2, Fn3, mkFn2, runFn3)
-import Data.Map as Map
 import Effect (Effect)
 import Effect.Class (liftEffect)
 import Foreign (Foreign)
@@ -45,11 +44,10 @@ activateWith live ctx env = fromAff do
   variables <- liftEffect $ variablesFrom env (manifest live).variables
   activated <- activate live
     { state: stateFromContext ctx, variables, sockets: socketsFromContext ctx, container: containerFromContext ctx }
-  let promised handle = fromAff <<< handle
   pure
-    { methods: Object.fromFoldable (Map.toUnfoldable (map promised activated.methods) :: Array _)
+    { methods: Object.fromFoldableWithIndex (map (fromAff <<< _) activated.methods)
     , alarm: fromAff activated.alarm
-    , connect: \socket -> fromAff (activated.connect socket)
-    , disconnect: \socket -> fromAff (activated.disconnect socket)
-    , fetch: \request -> fromAff (activated.fetch request)
+    , connect: fromAff <<< activated.connect
+    , disconnect: fromAff <<< activated.disconnect
+    , fetch: fromAff <<< activated.fetch
     }

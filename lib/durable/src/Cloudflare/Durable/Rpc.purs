@@ -21,6 +21,8 @@ import Control.Monad.Rec.Class (class MonadRec)
 import Data.Bifunctor (class Bifunctor, lmap)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Either (Either)
+import Data.Generic.Rep (class Generic)
+import Data.Show.Generic (genericShow)
 import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
@@ -38,14 +40,10 @@ data RpcFailure e
 
 derive instance functorRpcFailure :: Functor RpcFailure
 derive instance eqRpcFailure :: Eq e => Eq (RpcFailure e)
+derive instance genericRpcFailure :: Generic (RpcFailure e) _
 
 instance showRpcFailure :: Show e => Show (RpcFailure e) where
-  show = case _ of
-    DomainError e -> "DomainError " <> show e
-    PlatformError e -> "PlatformError " <> show e
-    TransportError message -> "TransportError " <> show message
-    DecodeError message -> "DecodeError " <> show message
-    RemoteDefect message -> "RemoteDefect " <> show message
+  show = genericShow
 
 newtype Rpc e a = Rpc (ExceptT (RpcFailure e) Aff a)
 
@@ -63,14 +61,14 @@ derive newtype instance monadErrorRpc :: MonadError (RpcFailure e) (Rpc e)
 instance monadRuntimeRpc :: MonadRuntime (Rpc e) where
   liftRuntime action = Rpc $ ExceptT $ lmap PlatformError <$> Runtime.run action
 
+instance bifunctorRpc :: Bifunctor Rpc where
+  bimap f g (Rpc action) = Rpc $ map g $ withExceptT (map f) action
+
 fail :: forall e a. e -> Rpc e a
 fail = throwError <<< DomainError
 
 run :: forall e a. Rpc e a -> Aff (Either (RpcFailure e) a)
 run (Rpc action) = runExceptT action
-
-instance bifunctorRpc :: Bifunctor Rpc where
-  bimap f g (Rpc action) = Rpc $ map g $ withExceptT (map f) action
 
 infallible :: forall e a. Rpc NoError a -> Rpc e a
 infallible = lmap absurd

@@ -13,7 +13,7 @@ import Data.Codec.Argonaut.Compat as Compat
 import Data.Maybe (Maybe(..))
 import Data.Symbol (class IsSymbol)
 import Prim.Row as Row
-import Prim.RowList (class RowToList, RowList, Cons, Nil)
+import Prim.RowList (class RowToList, Cons, Nil, RowList)
 import Type.Proxy (Proxy(..))
 
 class HasCodec a where

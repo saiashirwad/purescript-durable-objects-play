@@ -16,6 +16,7 @@ module Cloudflare.Durable.Core
   , connectHook
   , container
   , disconnectHook
+  , dispatch
   , emitting
   , fetchHook
   , get
@@ -23,7 +24,9 @@ module Cloudflare.Durable.Core
   , handlers
   , http
   , idFromName
+  , idCodec
   , idFromString
+  , idSegments
   , idToString
   , implement
   , implementWith
@@ -33,6 +36,7 @@ module Cloudflare.Durable.Core
   , namespace
   , newUniqueId
   , object
+  , parseId
   , printId
   , sockets
   , withHooks
@@ -54,8 +58,9 @@ import Cloudflare.Static (asks)
 import Cloudflare.Worker (Request, Response)
 import Cloudflare.Worker as Worker
 import Data.Argonaut.Core (Json)
-import Data.Codec.Argonaut (JsonDecodeError)
+import Data.Codec.Argonaut (JsonCodec, JsonDecodeError)
 import Data.Codec.Argonaut as CA
+import Data.Codec.Argonaut.Record as CAR
 import Data.Either (Either(..))
 import Data.Generic.Rep (class Generic)
 import Data.Map (Map)
@@ -102,7 +107,7 @@ object spec = Object
   , serve: serve list spec
   , connect: connect list spec
   , encodeEvent: case_
-  , decodeEvent: \_ -> Left $ CA.Named "event" $ CA.TypeMismatch "this object emits no events"
+  , decodeEvent: const $ Left $ CA.Named "event" $ CA.TypeMismatch "this object emits no events"
   }
   where
   list = Proxy :: Proxy list
@@ -119,8 +124,7 @@ emitting
   -> Object name api events
 emitting (Object o) spec = Object o { encodeEvent = CA.encode codec, decodeEvent = CA.decode codec }
   where
-  list = Proxy :: Proxy list
-  codec = variantCodec list spec
+  codec = variantCodec (Proxy :: Proxy list) spec
 
 className :: forall name api events. Object name api events -> String
 className (Object o) = o.name
@@ -129,10 +133,14 @@ className (Object o) = o.name
 -- | simulator is this, one per id; the tests check it behaves as the
 -- | implementation.
 loopback :: forall name api events. Object name api events -> Record api -> Record api
-loopback (Object o) impl = o.connect \name -> fromMaybe (missing name) $ Map.lookup name served
+loopback (Object o) impl = o.connect $ dispatch o.name (o.serve impl)
+
+-- | Served methods as one untyped call; an unknown method name is an error
+-- | naming the class.
+dispatch :: String -> Map String RawHandler -> RawCall
+dispatch klass methods name = fromMaybe missing $ Map.lookup name methods
   where
-  served = o.serve impl
-  missing name _ = throwError $ error $ o.name <> " has no method" <> show name
+  missing _ = throwError $ error $ klass <> " has no method " <> show name
 
 type HookFields =
   { alarm :: Runtime Unit
@@ -247,9 +255,7 @@ activate (Live { object: Object o, activate: activation }) env =
       , alarm: Runtime.rethrow hooks.alarm
       , connect: Runtime.rethrow <<< hooks.connect
       , disconnect: Runtime.rethrow <<< hooks.disconnect
-      , fetch: \request -> do
-          served <- Runtime.rethrow (hooks.fetch request)
-          pure $ fromMaybe (Worker.text 404 "this object serves no HTTP") served
+      , fetch: map (fromMaybe (Worker.text 404 "this object serves no HTTP")) <<< Runtime.rethrow <<< hooks.fetch
       }
     Left failure -> throwError $ error $ o.name <> " failed to activate: " <> show failure
 
@@ -272,6 +278,21 @@ printId :: Id -> String
 printId = case _ of
   Unique hex -> hex
   Named name -> name
+
+-- | An id as two URL segments, `name/<name>` or `id/<hex>`, and back.
+idSegments :: Id -> String
+idSegments = case _ of
+  Named name -> "name/" <> name
+  Unique hex -> "id/" <> hex
+
+parseId :: String -> String -> Maybe Id
+parseId "name" value = Just $ Named value
+parseId "id" value = Just $ Unique value
+parseId _ _ = Nothing
+
+-- | The body of `POST .../new`.
+idCodec :: JsonCodec { id :: String }
+idCodec = CAR.object "Id" { id: CA.string }
 
 newtype ObjectId :: Symbol -> Type
 newtype ObjectId name = ObjectId Id
@@ -309,7 +330,7 @@ get :: forall name api events. Namespace name api events -> ObjectId name -> Rec
 get (Namespace { object: Object o, transport }) (ObjectId id) = o.connect (transport.call id)
 
 getByName :: forall name api events. Namespace name api events -> String -> Record api
-getByName ns = get ns <<< ObjectId <<< Named
+getByName ns = get ns <<< idFromName ns
 
 -- | Subscribe to an object's events as `tag`. Returns the unsubscribe. The
 -- | shape is `makeEmitter`'s, so `makeEmitter (listen ns id tag)` is an `Emitter`.

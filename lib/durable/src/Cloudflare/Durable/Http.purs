@@ -8,13 +8,11 @@ module Cloudflare.Durable.Http
 
 import Prelude
 
-import Cloudflare.Durable.Core (Id(..), Namespace(..), className, printId)
+import Cloudflare.Durable.Core (Namespace(..), className, idCodec, parseId, printId)
 import Cloudflare.Worker (Route)
 import Cloudflare.Worker as Worker
 import Data.Array (drop, take)
-import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
-import Data.Codec.Argonaut.Record as CAR
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), joinWith, split, stripPrefix)
 
@@ -39,11 +37,3 @@ route prefix (Namespace { object, transport }) = Worker.route \request ->
   where
   name = className object
   path request = split (Pattern "/") <$> stripPrefix (Pattern (prefix <> "/")) (Worker.pathname request)
-
-parseId :: String -> String -> Maybe Id
-parseId "name" value = Just $ Named value
-parseId "id" value = Just $ Unique value
-parseId _ _ = Nothing
-
-idCodec :: JsonCodec { id :: String }
-idCodec = CAR.object "Id" { id: CA.string }

@@ -11,10 +11,10 @@ import Cloudflare.Durable.Alarm as Alarm
 import Cloudflare.Durable.Rpc (NoError, Rpc, method)
 import Cloudflare.Durable.Storage as Storage
 import Data.Array (fromFoldable)
+import Data.Foldable (traverse_)
 import Data.Map as Map
 import Data.Maybe (isJust)
 import Data.Time.Duration (Milliseconds(..))
-import Data.Foldable (traverse_)
 
 type ReminderApi =
   ( remind :: { after :: Number, note :: String } -> Rpc NoError Unit
@@ -48,7 +48,7 @@ reminderLive =
               Storage.put state noteKey note
               Alarm.scheduleIn state (Milliseconds after)
           , pending: \_ -> isJust <$> Alarm.scheduled state
-          , fired: \_ -> fromFoldable <<< Map.values <$> Storage.list state fired
+          , fired: \_ -> fromFoldable <$> Storage.list state fired
           , forget: \_ -> Storage.deleteAll state
           }
           `Durable.withHooks`

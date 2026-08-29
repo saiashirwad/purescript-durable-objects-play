@@ -9,6 +9,7 @@ module Cloudflare.Durable.Runtime
   , Socket
   , State(..)
   , class MonadRuntime
+  , decodedOr
   , liftRuntime
   , platform
   , platformError
@@ -18,36 +19,43 @@ module Cloudflare.Durable.Runtime
 
 import Prelude
 
+import Cloudflare.Worker (Request, Response)
 import Control.Apply (lift2)
 import Control.Monad.Error.Class (class MonadError, class MonadThrow, throwError)
 import Control.Monad.Except (ExceptT(..), runExceptT)
 import Control.Monad.Rec.Class (class MonadRec)
 import Data.Argonaut.Core (Json)
 import Data.Bifunctor (lmap)
+import Data.Codec.Argonaut (JsonDecodeError, printJsonDecodeError)
 import Data.DateTime.Instant (Instant)
 import Data.Either (Either, either)
-import Data.Maybe (Maybe)
-import Data.Tuple (Tuple)
-import Cloudflare.Worker (Request, Response)
+import Data.Generic.Rep (class Generic)
 import Data.Map (SemigroupMap)
+import Data.Maybe (Maybe)
 import Data.Maybe.Last (Last)
 import Data.Monoid.Conj (Conj)
 import Data.Newtype (class Newtype)
 import Data.Semigroup.Last as Semigroup
+import Data.Show.Generic (genericShow)
+import Data.Tuple (Tuple)
 import Effect.Aff (Aff, attempt, error, message)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
 
-data PlatformError = PlatformError { operation :: String, message :: String }
-
-instance showPlatformError :: Show PlatformError where
-  show (PlatformError { operation, message }) =
-    "PlatformError { operation: " <> show operation <> ", message: " <> show message <> " }"
+newtype PlatformError = PlatformError { operation :: String, message :: String }
 
 derive instance eqPlatformError :: Eq PlatformError
+derive instance genericPlatformError :: Generic PlatformError _
+
+instance showPlatformError :: Show PlatformError where
+  show = genericShow
 
 platformError :: forall m a. MonadThrow PlatformError m => String -> String -> m a
 platformError operation message = throwError $ PlatformError { operation, message }
+
+-- | A decode failure, blamed on the platform under `operation`.
+decodedOr :: forall a. String -> Either JsonDecodeError a -> Runtime a
+decodedOr operation = either (platformError operation <<< printJsonDecodeError) pure
 
 type Listing = { prefix :: String, limit :: Maybe Int, reverse :: Boolean }
 
@@ -97,11 +105,10 @@ data Exit
   | Lost String
 
 derive instance eqExit :: Eq Exit
+derive instance genericExit :: Generic Exit _
 
 instance showExit :: Show Exit where
-  show = case _ of
-    Exited code -> "(Exited " <> show code <> ")"
-    Lost why -> "(Lost " <> show why <> ")"
+  show = genericShow
 
 -- | The untyped container surface a backend provides. `probe` is true once
 -- | something listens on the port.

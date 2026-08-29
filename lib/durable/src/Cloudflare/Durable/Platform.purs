@@ -20,11 +20,12 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap, wrap)
 import Data.Nullable (Nullable, toMaybe, toNullable)
+import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff, error, throwError)
-import Effect.Exception (throwException)
 import Effect.Class (liftEffect)
+import Effect.Exception (throwException)
 import Foreign (Foreign)
 import Foreign.Object as Object
 
@@ -54,7 +55,7 @@ containerFromContext :: Foreign -> RawContainer
 containerFromContext ctx =
   { running: liftEffect $ containerRunning ctx
   , start: \(launch :: Launch) -> liftEffect $ containerStart ctx
-      { env: Object.fromFoldable (Map.toUnfoldable (Container.environment launch) :: Array _)
+      { env: Object.fromFoldableWithIndex (Container.environment launch)
       , entrypoint: toNullable $ Container.command launch
       , enableInternet: Container.internet launch
       }
@@ -90,9 +91,7 @@ stateFromContext ctx = State
   , deleteAll: toAffE (storageDeleteAll ctx)
   , now: liftEffect now >>= toInstant
   , setAlarm: \at -> toAffE (alarmSet ctx (unwrap (unInstant at)))
-  , getAlarm: toAffE (alarmGet ctx) >>= toMaybe >>> case _ of
-      Just ms -> Just <$> toInstant ms
-      Nothing -> pure Nothing
+  , getAlarm: toAffE (alarmGet ctx) >>= traverse toInstant <<< toMaybe
   , deleteAlarm: toAffE (alarmDelete ctx)
   , sql: \text bindings -> liftEffect (sqlExec ctx text bindings)
   }
@@ -103,7 +102,7 @@ toInstant ms = case instant (wrap ms) of
   Nothing -> throwError $ error $ "time out of range: " <> show ms
 
 variablesFrom :: Foreign -> Array String -> Effect (Map String String)
-variablesFrom env names = Map.fromFoldable <<< (Object.toUnfoldable :: _ -> Array _) <$> variables env names
+variablesFrom env names = Map.fromFoldableWithIndex <$> variables env names
 
 namespaceFromBinding :: forall name api events. Object name api events -> Foreign -> Namespace name api events
 namespaceFromBinding object ns = namespace object

@@ -17,22 +17,21 @@ module Cloudflare.Durable.Simulator
 
 import Prelude
 
-import Cloudflare.Durable.Core (Activated, Id(..), Listener, Live(..), Namespace, activate, className, namespace)
+import Cloudflare.Durable.Core (Activated, Id(..), Listener, Live(..), Namespace, activate, className, dispatch, namespace)
 import Cloudflare.Durable.Events (Signal(..))
 import Cloudflare.Durable.Runtime (Exit(..), Launch, RawContainer, RawSockets, Socket, State(..))
 import Cloudflare.Worker (Request, Response)
-import Control.Monad.Rec.Class (Step(..), tailRecM)
+import Control.Monad.Rec.Class (untilJust)
 import Data.Argonaut.Core (Json)
-import Data.Array (filter, reverse, take)
+import Data.Array (reverse, take)
 import Data.Array as Array
 import Data.DateTime.Instant (Instant, instant, unInstant)
 import Data.Foldable (for_, traverse_)
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe, maybe)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, maybe)
 import Data.String (Pattern(..), stripPrefix)
 import Data.Time.Duration (Milliseconds(..))
-import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff, delay, error, launchAff_, throwError)
 import Effect.Class (liftEffect)
@@ -106,15 +105,11 @@ memoryState (Clock c) = do
     state = State
       { get: \key -> liftEffect $ Map.lookup key <$> Ref.read storage
       , put: \key value -> liftEffect $ Ref.modify_ (Map.insert key value) storage
-      , delete: \key -> liftEffect do
-          entries <- Ref.read storage
-          Ref.write (Map.delete key entries) storage
-          pure $ Map.member key entries
+      , delete: \key -> liftEffect $ Ref.modify' (\entries -> { state: Map.delete key entries, value: Map.member key entries }) storage
       , list: \options -> liftEffect do
-          entries <- Map.toUnfoldable <$> Ref.read storage
-          let matching = filter (\(Tuple key _) -> hasPrefix options.prefix key) entries
+          matching <- Map.toUnfoldable <<< Map.filterKeys (hasPrefix options.prefix) <$> Ref.read storage
           let ordered = if options.reverse then reverse matching else matching
-          pure $ maybe ordered (_ `take` ordered) options.limit
+          pure $ maybe identity take options.limit ordered
       , deleteAll: liftEffect $ Ref.write Map.empty storage *> dropAll db
       , now: liftEffect $ Ref.read c.time
       , setAlarm: \at -> liftEffect $ Ref.write (Just at) alarm
@@ -124,18 +119,18 @@ memoryState (Clock c) = do
       }
   pure { state, alarm }
   where
-  hasPrefix p key = p == "" || stripPrefix (Pattern p) key /= Nothing
+  hasPrefix p = isJust <<< stripPrefix (Pattern p)
 
 -- | Open sockets, each a listener to deliver to.
 socketBook :: Effect { sockets :: RawSockets, book :: Book }
 socketBook = do
   book <- Ref.new Map.empty
   let
-    each f = liftEffect $ Ref.read book >>= traverse_ f
+    deliverTo json { deliver } = deliver (Delivered json)
     sockets =
-      { broadcast: \json -> each \{ deliver } -> deliver (Delivered json)
-      , send: \socket json -> liftEffect $ Ref.read book >>= Map.lookup socket.id >>> traverse_ \{ deliver } -> deliver (Delivered json)
-      , connected: liftEffect $ map _.socket <<< Map.values >>> Array.fromFoldable <$> Ref.read book
+      { broadcast: \json -> liftEffect $ Ref.read book >>= traverse_ (deliverTo json)
+      , send: \socket json -> liftEffect $ Ref.read book >>= Map.lookup socket.id >>> traverse_ (deliverTo json)
+      , connected: liftEffect $ Array.fromFoldable <<< map _.socket <$> Ref.read book
       }
   pure { sockets, book }
 
@@ -157,7 +152,10 @@ fakeContainer stub = do
         if alive then stub.serve port req else throwError $ error "container port not listening"
     , signal: \code -> halt (128 + code)
     , destroy: halt 137
-    , exit: tailRecM (\_ -> liftEffect (Ref.read exited) >>= maybe (delay (Milliseconds 20.0) $> Loop unit) (pure <<< Done)) unit
+    , exit: untilJust do
+        done <- liftEffect $ Ref.read exited
+        when (isNothing done) $ delay (Milliseconds 20.0)
+        pure done
     }
 
 type Instance = { activated :: Activated, alarm :: Alarm, book :: Book }
@@ -188,9 +186,7 @@ simulateWith stub timeline@(Clock c) live@(Live { object }) = do
 
     call id methodName request = do
       { activated } <- instanceFor id
-      case Map.lookup methodName activated.methods of
-        Just handle -> handle request
-        Nothing -> throwError $ error $ name <> " has no method " <> show methodName
+      dispatch name activated.methods methodName request
 
     unique = liftEffect do
       n <- Ref.modify (_ + 1) counter
@@ -215,7 +211,7 @@ simulateWith stub timeline@(Clock c) live@(Live { object }) = do
       activated.fetch request
 
     wake at = do
-      all <- liftEffect $ Map.values <$> Ref.read instances
+      all <- liftEffect $ Ref.read instances
       for_ all \{ activated, alarm } -> do
         due <- liftEffect $ Ref.read alarm
         for_ due \at' -> when (at' <= at) do

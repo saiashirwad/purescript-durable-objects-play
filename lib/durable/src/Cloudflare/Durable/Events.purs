@@ -13,28 +13,27 @@ module Cloudflare.Durable.Events
   , encodeEvents
   , event
   , eventWith
-  , unwire
   , variantCodec
-  , wire
+  , wireCodec
   ) where
 
 import Prelude
 
 import Cloudflare.Durable.Codec (class HasCodec, codec)
-import Data.Codec (codec')
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
-import Data.Codec.Argonaut (JsonCodec, JsonDecodeError(..), printJsonDecodeError)
+import Data.Codec (codec')
+import Data.Codec.Argonaut (JsonCodec, JsonDecodeError, printJsonDecodeError)
 import Data.Codec.Argonaut as CA
-import Data.Either (Either(..), either, note)
+import Data.Codec.Argonaut.Record as CAR
+import Data.Either (Either(..), either)
+import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Show.Generic (genericShow)
 import Data.Symbol (class IsSymbol, reflectSymbol)
-import Data.Tuple (Tuple(..))
-import Data.Tuple.Nested ((/\))
 import Data.Variant (Variant, case_, inj, on)
-import Foreign.Object as Object
 import Prim.Row as Row
-import Prim.RowList (RowList, Cons, Nil)
+import Prim.RowList (Cons, Nil, RowList)
 import Record as Record
 import Type.Proxy (Proxy(..))
 
@@ -59,6 +58,10 @@ data Signal a
 
 derive instance functorSignal :: Functor Signal
 derive instance eqSignal :: Eq a => Eq (Signal a)
+derive instance genericSignal :: Generic (Signal a) _
+
+instance showSignal :: Show a => Show (Signal a) where
+  show = genericShow
 
 instance applySignal :: Apply Signal where
   apply = ap
@@ -79,13 +82,6 @@ instance monadSignal :: Monad Signal
 decoded :: forall a. (Json -> Either JsonDecodeError a) -> Signal Json -> Signal a
 decoded decode = (_ >>= either (Garbled <<< printJsonDecodeError) Delivered <<< decode)
 
-instance showSignal :: Show a => Show (Signal a) where
-  show = case _ of
-    Opened -> "Opened"
-    Closed -> "Closed"
-    Delivered a -> "(Delivered " <> show a <> ")"
-    Garbled m -> "(Garbled " <> show m <> ")"
-
 class EncodeEvents (list :: RowList Type) (spec :: Row Type) (events :: Row Type) | list -> events where
   encodeEvents :: Proxy list -> Record spec -> Variant events -> Json
 
@@ -100,7 +96,7 @@ instance encodeEventsCons ::
   ) =>
   EncodeEvents (Cons name (Event a) tail) spec events where
   encodeEvents _ spec =
-    on name (\value -> wire (reflectSymbol name) (CA.encode c value)) (encodeEvents (Proxy :: Proxy tail) spec)
+    on name (\value -> CA.encode wireCodec { event: reflectSymbol name, value: CA.encode c value }) (encodeEvents (Proxy :: Proxy tail) spec)
     where
     name = Proxy :: Proxy name
     Event c = Record.get name spec
@@ -140,15 +136,9 @@ variantCodec list spec = codec' decode encode
   encode = encodeEvents list spec
 
   decode json = do
-    Tuple tag value <- unwire json
+    { event: tag, value } <- CA.decode wireCodec json
     fromMaybe (Left $ CA.Named "event" $ CA.UnexpectedValue $ J.fromString tag) $ decodeEvents list spec tag value
 
-wire :: String -> Json -> Json
-wire tag value = J.fromObject $ Object.fromFoldable [ "event" /\ J.fromString tag, "value" /\ value ]
-
-unwire :: Json -> Either JsonDecodeError (Tuple String Json)
-unwire json = do
-  fields <- note (TypeMismatch "Object") $ J.toObject json
-  tag <- note (AtKey "event" MissingValue) (Object.lookup "event" fields) >>= J.toString >>> note (AtKey "event" (TypeMismatch "String"))
-  value <- note (AtKey "value" MissingValue) $ Object.lookup "value" fields
-  pure $ Tuple tag value
+-- | The envelope: `{ "event": tag, "value": json }`.
+wireCodec :: JsonCodec { event :: String, value :: Json }
+wireCodec = CAR.object "event" { event: CA.string, value: CA.json }

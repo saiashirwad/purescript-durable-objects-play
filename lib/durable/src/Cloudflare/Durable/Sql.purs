@@ -23,7 +23,7 @@ module Cloudflare.Durable.Sql
 import Prelude
 
 import Cloudflare.Durable.Codec (class HasCodec, codec)
-import Cloudflare.Durable.Runtime (class MonadRuntime, State(..), liftRuntime, platform, platformError)
+import Cloudflare.Durable.Runtime (class MonadRuntime, State(..), decodedOr, liftRuntime, platform)
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
@@ -31,7 +31,7 @@ import Data.Array (head)
 import Data.Codec.Argonaut (JsonCodec, JsonDecodeError(..))
 import Data.Codec.Argonaut as CA
 import Data.Divisible (conquer)
-import Data.Either (Either, either, note)
+import Data.Either (Either, note)
 import Data.Functor.Contravariant (cmap)
 import Data.Maybe (Maybe)
 import Data.Op (Op(..))
@@ -81,13 +81,13 @@ instance profunctorStatement :: Profunctor Statement where
   dimap f g (Statement s) = Statement s { params = cmap f s.params, row = g <$> s.row }
 
 statement :: forall i o. String -> Params i -> Decoder o -> Statement i o
-statement sql params r = Statement { sql, params, row: r }
+statement sql params row = Statement { sql, params, row }
 
 query :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m (Array o)
 query (State s) (Statement { sql, params: Op encode, row: Decoder decode }) input = liftRuntime do
   let operation = "sql " <> show sql
   rows <- platform operation $ s.sql sql (encode input)
-  either (platformError operation <<< CA.printJsonDecodeError) pure $ traverse (runReaderT decode) rows
+  decodedOr operation $ traverse (runReaderT decode) rows
 
 first :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m (Maybe o)
 first state stmt = map head <<< query state stmt

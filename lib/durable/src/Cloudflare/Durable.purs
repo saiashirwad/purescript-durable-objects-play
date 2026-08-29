@@ -11,12 +11,13 @@ module Cloudflare.Durable
 import Prelude
 
 import Cloudflare.Durable.Core (Handlers, Hooks, Live, Manifest, Namespace, Object, ObjectId, alarmHook, className, connectHook, container, disconnectHook, emitting, fetchHook, get, getByName, handlers, http, idFromName, idFromString, idToString, implement, implementWith, listen, loopback, manifest, newUniqueId, object, sockets, withHooks) as Core
-import Cloudflare.Durable.Events (Event, Signal(..), event, eventWith) as Events
-import Cloudflare.Durable.Sockets (Sockets) as Sockets
 import Cloudflare.Durable.Core (Live(..), Object, className, manifest)
+import Cloudflare.Durable.Events (Event, Signal(..), event, eventWith) as Events
 import Cloudflare.Durable.Init (Init, Plan, optional, state, variable) as Init
+import Cloudflare.Durable.Init (instanceTypeName)
 import Cloudflare.Durable.Platform (namespaceFromBinding)
 import Cloudflare.Durable.Runtime (class MonadRuntime, PlatformError(..), Runtime, Socket, State, liftRuntime) as Runtime
+import Cloudflare.Durable.Sockets (Sockets) as Sockets
 import Cloudflare.Worker (ContainerSpec, WorkerInit, WorkerRef, objectBinding, scriptName)
 import Data.Maybe (Maybe(..))
 
@@ -24,7 +25,7 @@ import Data.Maybe (Maybe(..))
 -- | container image all follow from the `Live`.
 host :: forall name api events. Live name api events -> WorkerInit (Core.Namespace name api events)
 host live@(Live { object }) = bound object Nothing $ (manifest live).container <#> \i ->
-  { image: i.image, instances: i.instances, instanceType: show i.instanceType }
+  { image: i.image, instances: i.instances, instanceType: instanceTypeName i.instanceType }
 
 -- | Reach an object hosted by another Worker.
 from :: forall name api events. WorkerRef -> Object name api events -> WorkerInit (Core.Namespace name api events)
@@ -32,4 +33,6 @@ from worker object = bound object (Just (scriptName worker)) Nothing
 
 bound :: forall name api events. Object name api events -> Maybe String -> Maybe ContainerSpec -> WorkerInit (Core.Namespace name api events)
 bound object scriptName container = namespaceFromBinding object <$> objectBinding
-  { className: className object, binding: className object, scriptName, container }
+  { className: name, binding: name, scriptName, container }
+  where
+  name = className object

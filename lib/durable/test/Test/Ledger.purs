@@ -56,13 +56,13 @@ ledgerLive =
       pure
         { deposit: \amount -> do
             current <- fromMaybe 0 <$> Storage.get state balanceKey
-            Storage.put state balanceKey (current + amount)
-            pure (current + amount)
+            let next = current + amount
+            Storage.put state balanceKey next $> next
         , withdraw: \requested -> do
             balance <- fromMaybe 0 <$> Storage.get state balanceKey
             when (requested > balance) $ fail $ Insufficient { balance, requested }
-            Storage.put state balanceKey (balance - requested)
-            pure (balance - requested)
+            let next = balance - requested
+            Storage.put state balanceKey next $> next
         , corrupt: \_ -> Storage.put state poisonKey "not a number"
         , balance: \_ -> fromMaybe 0 <$> Storage.get state balanceKey
         }

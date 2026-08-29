@@ -5,16 +5,14 @@ module Cloudflare.Durable.Client
 
 import Prelude
 
-import Cloudflare.Durable.Core (Id(..), Listener, Namespace, Object, className, namespace)
+import Cloudflare.Durable.Core (Id(..), Listener, Namespace, Object, className, idCodec, idSegments, namespace)
 import Cloudflare.Durable.Events (Signal(..))
 import Control.Monad.Except (runExcept)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
 import Data.Argonaut.Parser (jsonParser)
 import Data.Bifunctor (lmap)
-import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
-import Data.Codec.Argonaut.Record as CAR
 import Data.Either (Either(..), either)
 import Data.Foldable (foldMap, for_, traverse_)
 import Data.Maybe (Maybe(..))
@@ -37,8 +35,7 @@ import Web.Socket.WebSocket as WebSocket
 connect :: forall name api events. String -> Object name api events -> Namespace name api events
 connect prefix object = namespace object
   { call: \id methodName body -> postJson (url id methodName) body
-  , listen: \id tag (deliver :: Listener) ->
-      openSocket (url id "socket?tag=" <> tag) (deliver Opened) (deliver Closed) (deliver <<< Delivered) (deliver <<< Garbled)
+  , listen: \id tag -> openSocket (url id "socket?tag=" <> tag)
   , fetch: \_ _ -> throwError $ error "fetch into an object is for Workers; a browser goes through Http.route"
   , unique: do
       response <- postJson (base <> "/new") J.jsonNull
@@ -58,22 +55,24 @@ postJson url body = do
   either (throwError <<< error) pure (jsonParser text)
 
 -- | Reconnects two seconds after an unexpected close; the returned closer stops that.
-openSocket :: String -> Effect Unit -> Effect Unit -> (Json -> Effect Unit) -> (String -> Effect Unit) -> Effect (Effect Unit)
-openSocket path onOpen onClose onMessage onGarbled = do
+openSocket :: String -> Listener -> Effect (Effect Unit)
+openSocket path deliver = do
   url <- socketUrl path
   stopped <- Ref.new false
   timer <- Ref.new Nothing
   current <- Ref.new Nothing
-  opened <- eventListener \_ -> onOpen
+  opened <- eventListener \_ -> deliver Opened
   received <- eventListener \event -> for_ (MessageEvent.fromEvent event) \message ->
-    either onGarbled onMessage $ decode (MessageEvent.data_ message)
+    deliver $ either Garbled Delivered $ decode (MessageEvent.data_ message)
   let
     open = do
       socket <- WebSocket.create url []
       Ref.write (Just socket) current
       closed <- eventListener \_ -> do
-        onClose
-        unlessM (Ref.read stopped) $ setTimeout 2000 open >>= Just >>> flip Ref.write timer
+        deliver Closed
+        unlessM (Ref.read stopped) do
+          reconnect <- setTimeout 2000 open
+          Ref.write (Just reconnect) timer
       let target = WebSocket.toEventTarget socket
       addEventListener SocketEvent.onOpen opened false target
       addEventListener SocketEvent.onMessage received false target
@@ -97,11 +96,3 @@ socketUrl path = case stripPrefix (Pattern "/") path of
     protocol <- Location.protocol location
     host <- Location.host location
     pure $ (if protocol == "https:" then "wss://" else "ws://") <> host <> path
-
-idSegments :: Id -> String
-idSegments = case _ of
-  Named name -> "name/" <> name
-  Unique id -> "id/" <> id
-
-idCodec :: JsonCodec { id :: String }
-idCodec = CAR.object "Id" { id: CA.string }
