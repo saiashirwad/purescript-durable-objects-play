@@ -5,14 +5,14 @@
   "scripts": {
     "check": "tsc -p tsconfig.worker.json && tsc -p tsconfig.browser.json && tsc -p tsconfig.node.json",
     "build": "spago build && bun apps/site/scripts/css.mjs",
-    "bundle": "spago bundle -p chat && spago bundle -p counter && spago bundle -p ui",
+    "bundle": "spago bundle -p chat && spago bundle -p chat --module Chat.Presentation --outfile ../site/public/chat-presentation.js --platform browser --bundle-type app && spago bundle -p counter && spago bundle -p ui",
     "config": "bun apps/site/scripts/config.mjs",
     "dev": "bun run build && bun run bundle && bun run config && wrangler dev --config apps/site/wrangler.jsonc",
     "deploy": "bun run check && bun run build && bun run bundle && bun run config && wrangler deploy --config apps/site/wrangler.jsonc",
     "test": "spago test",
     "test:chat": "spago test -p chat",
     "test:e2e": "playwright test -c apps/site/playwright.config.ts",
-    "test:e2e:chat": "playwright test -c apps/site/playwright.config.ts chat.spec.ts",
+    "test:e2e:chat": "playwright test -c apps/site/playwright.config.ts chat.spec.ts chat-presentation.spec.ts",
     "ci:chat": "bun run check && bun run test:chat && bun run test:e2e:chat"
   },
   "devDependencies": {

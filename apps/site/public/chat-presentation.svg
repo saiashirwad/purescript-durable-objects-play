@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title description">
+  <title id="title">Layered color study</title>
+  <desc id="description">Rounded translucent shapes over a blue and violet gradient.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e3a8a" />
+      <stop offset="0.55" stop-color="#6d28d9" />
+      <stop offset="1" stop-color="#be185d" />
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.78" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.12" />
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" fill="url(#background)" />
+  <circle cx="510" cy="80" r="105" fill="#fbbf24" fill-opacity="0.72" />
+  <rect x="76" y="62" width="348" height="236" rx="42" fill="url(#glass)" stroke="#ffffff" stroke-opacity="0.5" stroke-width="3" />
+  <path d="M116 238c56-90 109-93 160-9 48 78 97 67 132-32" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="18" />
+  <circle cx="170" cy="132" r="28" fill="#ffffff" fill-opacity="0.9" />
+</svg>

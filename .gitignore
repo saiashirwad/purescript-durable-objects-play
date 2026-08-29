@@ -6,6 +6,7 @@ output/
 
 # Generated
 apps/site/public/chat.js
+apps/site/public/chat-presentation.js
 apps/site/public/counter.js
 apps/site/public/ui-lab.js
 apps/site/public/ui.css

@@ -42,7 +42,7 @@ styles =
       , "position" := "sticky"
       , "z-index" := "2"
       ]
-  , replyChip: mutedText <> create
+  , replyChip: create
       [ "align-items" := "center"
       , "background-color" := var tokens.tint
       , "border-radius" := var tokens.radiusSm

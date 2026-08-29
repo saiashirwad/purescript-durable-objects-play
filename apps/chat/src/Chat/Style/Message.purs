@@ -198,7 +198,6 @@ styles =
       [ "border-inline-start" := "2px solid currentColor"
       , "margin-block" := "0.3rem"
       , "margin-inline" := "0"
-      , "opacity" := "0.8"
       , "padding-inline-start" := "0.6rem"
       ]
   , codeBlock: create
@@ -262,7 +261,6 @@ styles =
   , quoteText: mutedText <> truncate <> ("max-inline-size" := "100%")
   , mineQuoteText: create
       [ "color" := "inherit"
-      , "opacity" := "0.85"
       ]
   , reactions: create
       [ "display" := "flex"

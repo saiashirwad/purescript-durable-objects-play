@@ -42,5 +42,5 @@ jobs:
           purescript: 0.15.16
           spago: 1.0.4
       - run: bun install --frozen-lockfile
-      - run: bunx playwright install --with-deps chrome
+      - run: bunx playwright install --with-deps chromium
       - run: bun run ci:chat
