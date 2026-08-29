@@ -238,6 +238,39 @@ main = launchAff_ do
           && map (map _.text <<< _.messages) afterExtraAlarm == Right [ "retry this @ai", "recovered" ]
           && attempted == 2
 
+  check "image cleanup does not wake assistant retries early" do
+    isolationTimeline <- Simulator.clock
+    attempts <- liftEffect $ Ref.new 0
+    let
+      flaky = Model.Model \_ -> do
+        attempt <- liftEffect $ Ref.modify (_ + 1) attempts
+        pure
+          if attempt == 1 then Left $ Model.Transport "try again"
+          else Right { message: Assistant { text: Just "recovered", toolCalls: [] }, finish: Stop, usage: Nothing }
+    isolationRooms <- Simulator.simulateWith
+      (Simulator.noContainer { variables = Map.singleton "DEEPSEEK_API_KEY" "test-key" })
+      isolationTimeline
+      (roomLiveWith \_ -> flaky)
+    id <- Durable.newUniqueId isolationRooms
+    let
+      chat = Durable.get isolationRooms id
+      png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    _ <- Durable.http isolationRooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
+    Simulator.advance isolationTimeline (Milliseconds 86399999.0)
+    _ <- Rpc.run $ chat.post { author: "ann", text: "retry @ai", images: [], replyTo: Nothing }
+    Simulator.advance isolationTimeline (Milliseconds 0.0)
+    Simulator.advance isolationTimeline (Milliseconds 2.0)
+    early <- Rpc.run $ chat.snapshot unit
+    earlyAttempts <- liftEffect $ Ref.read attempts
+    Simulator.advance isolationTimeline (Milliseconds 998.0)
+    retried <- Rpc.run $ chat.snapshot unit
+    retriedAttempts <- liftEffect $ Ref.read attempts
+    pure
+      $ map (map _.text <<< _.messages) early == Right [ "retry @ai" ]
+          && earlyAttempts == 1
+          && map (map _.text <<< _.messages) retried == Right [ "retry @ai", "recovered" ]
+          && retriedAttempts == 2
+
   check "assistant failures hide provider details and do not retry permanent errors" do
     attempts <- liftEffect $ Ref.new 0
     let
@@ -330,9 +363,11 @@ main = launchAff_ do
     _ <- Durable.http mediaRooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
     _ <- Rpc.run $ (Durable.get mediaRooms id).post { author: "ann", text: "", images: [ imageId 2 ], replyTo: Nothing }
     Simulator.advance mediaTimeline (Milliseconds 86400001.0)
+    freshUpload <- Durable.http mediaRooms id $ Worker.requestWith { url: "http://room/image", method: "POST", contentType: "image/png", base64: png }
     abandoned <- Durable.http mediaRooms id $ Worker.requestTo "http://room/image/1"
     attached <- Durable.http mediaRooms id $ Worker.requestTo "http://room/image/2"
-    pure $ Worker.status abandoned == 404 && Worker.status attached == 200
+    fresh <- Durable.http mediaRooms id $ Worker.requestTo "http://room/image/3"
+    pure $ Worker.status abandoned == 404 && Worker.status attached == 200 && Worker.status freshUpload == 200 && Worker.status fresh == 200
 
   check "a matched fetch hook stops later hooks" do
     layered <- Simulator.simulate $ withLiveHooks

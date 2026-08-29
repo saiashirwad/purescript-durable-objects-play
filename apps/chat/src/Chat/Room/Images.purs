@@ -24,7 +24,7 @@ import Cloudflare.Worker as Worker
 import Data.Array (any)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
-import Data.DateTime.Instant (instant, unInstant)
+import Data.DateTime.Instant (unInstant)
 import Data.Divide (divided)
 import Data.Int (fromString)
 import Data.Foldable (traverse_)
@@ -32,7 +32,6 @@ import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap)
 import Data.Profunctor (lcmap)
 import Data.String (Pattern(..), contains, length, stripPrefix, toLower, trim)
-import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple.Nested ((/\))
 import Effect.Aff.Class (liftAff)
 
@@ -88,7 +87,7 @@ open state = do
   pure $ Images state
 
 hooks :: Images -> Hooks
-hooks images = Durable.fetchHook (serve images) <> Durable.alarmHook (cleanup images)
+hooks images = Durable.fetchHook (serve images)
 
 exists :: Images -> ImageId -> Runtime Boolean
 exists (Images state) id = Sql.first state imageExists id <#> case _ of
@@ -99,15 +98,12 @@ attach :: Images -> Number -> Array ImageId -> Runtime Unit
 attach (Images state) attachedAt = traverse_ $ Sql.execute state attachImage <<< { id: _, attachedAt }
 
 cleanup :: Images -> Runtime Unit
-cleanup images@(Images state) = do
+cleanup (Images state) = do
   current <- unwrap <<< unInstant <$> Alarm.now state
-  Sql.execute state deleteAbandoned (current - abandonedTtlMs)
-  Sql.first state nextAbandoned unit >>= case _ of
-    Nothing -> pure unit
-    Just uploadedAt -> scheduleEarlier images (uploadedAt + abandonedTtlMs)
+  cleanupAt state current
 
 serve :: Images -> Worker.Request -> Runtime (Maybe Worker.Response)
-serve images@(Images state) request = case Worker.method request, Worker.pathname request of
+serve (Images state) request = case Worker.method request, Worker.pathname request of
   "POST", "/image" -> case Worker.header request "content-type" >>= parseImageMime of
     Nothing -> pure $ Just $ Worker.text 415 "send a JPEG, PNG, WebP, GIF, or AVIF image"
     Just mime -> do
@@ -116,27 +112,18 @@ serve images@(Images state) request = case Worker.method request, Worker.pathnam
       else if not $ matchesImageMimeImpl (printImageMime mime) body then pure $ Just $ Worker.text 415 "image bytes do not match its type"
       else do
         uploadedAt <- unwrap <<< unInstant <$> Alarm.now state
+        cleanupAt state uploadedAt
         Sql.first state insertImage { mime: printImageMime mime, data: body, uploadedAt } >>= case _ of
           Nothing -> pure $ Just $ Worker.text 500 "could not store image"
-          Just id -> do
-            scheduleEarlier images (uploadedAt + abandonedTtlMs)
-            pure $ Just $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: codec }) { id }
+          Just id -> pure $ Just $ Worker.json 200 $ CA.encode (CAR.object "Image" { id: codec }) { id }
   "GET", path | Just id <- stripPrefix (Pattern "/image/") path >>= fromString >>= mkImageId ->
     Sql.first state selectImage id <#> case _ of
       Just image -> Just $ Worker.bytes 200 image.mime image.data
       Nothing -> Just $ Worker.text 404 "no such image"
   _, _ -> pure Nothing
 
-scheduleEarlier :: Images -> Number -> Runtime Unit
-scheduleEarlier (Images state) millis = case instant (Milliseconds millis) of
-  Nothing -> pure unit
-  Just candidate -> do
-    current <- Alarm.scheduled state
-    let
-      shouldReplace = case current of
-        Nothing -> true
-        Just scheduled -> candidate < scheduled
-    when shouldReplace $ Alarm.schedule state candidate
+cleanupAt :: State -> Number -> Runtime Unit
+cleanupAt state current = Sql.execute state deleteAbandoned (current - abandonedTtlMs)
 
 createImages :: Statement Unit Unit
 createImages = Sql.statement
@@ -204,8 +191,3 @@ deleteAbandoned = Sql.statement
   (Sql.param CA.number)
   (pure unit)
 
-nextAbandoned :: Statement Unit Number
-nextAbandoned = Sql.statement
-  "SELECT uploaded_at FROM images WHERE attached_at IS NULL ORDER BY uploaded_at LIMIT 1"
-  Sql.noParams
-  (Sql.columnOf "uploaded_at")
