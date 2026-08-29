@@ -54,8 +54,8 @@ main = launchAff_ do
     let chat = Durable.get rooms id
     first <- chat.post { author: "ann", text: "hello", images: [], replyTo: Nothing }
     second <- chat.post { author: "bob", text: "hi", images: [], replyTo: Nothing }
-    history <- Rpc.infallible $ chat.history unit
-    pure $ (_.id <$> history) == [ 1, 2 ] && first.id == 1 && second.author == "bob"
+    snapshot <- Rpc.infallible $ chat.snapshot unit
+    pure $ (_.id <$> snapshot.messages) == [ 1, 2 ] && first.id == 1 && second.author == "bob"
 
   check "a blank post is a domain error" do
     let chat = Durable.getByName rooms "validation"
@@ -79,7 +79,7 @@ main = launchAff_ do
       Left _ -> true
       Right _ -> false
 
-  check "sockets get posts and presence; members tracks them" do
+  check "sockets get posts and absolute presence" do
     id <- Durable.newUniqueId rooms
     let chat = Durable.get rooms id
     annLog <- liftEffect $ Ref.new []
@@ -89,23 +89,39 @@ main = launchAff_ do
     stopBob <- liftEffect $ Durable.listen rooms id "bob" (record bobLog)
     _ <- Rpc.run $ chat.typing "bob"
     _ <- Rpc.run $ chat.post { author: "ann", text: "hi", images: [], replyTo: Nothing }
-    members <- Rpc.run $ chat.members unit
+    current <- Rpc.run $ chat.snapshot unit
     liftEffect stopBob
-    after <- Rpc.run $ chat.members unit
+    after <- Rpc.run $ chat.snapshot unit
     ann <- liftEffect $ Ref.read annLog
     bob <- liftEffect $ Ref.read bobLog
-    pure $ ann == [ "opened", "joined ann", "joined bob", "typing bob", "message hi", "left bob" ]
-      && bob == [ "opened", "joined bob", "typing bob", "message hi", "closed" ]
-      && members == Right [ "ann", "bob" ]
-      && after == Right [ "ann" ]
+    pure $ ann == [ "opened", "presence [\"ann\"]", "presence [\"ann\",\"bob\"]", "typing bob", "message hi", "presence [\"ann\"]" ]
+      && bob == [ "opened", "presence [\"ann\",\"bob\"]", "typing bob", "message hi", "closed" ]
+      && map _.presence current == Right [ "ann", "bob" ]
+      && map _.presence after == Right [ "ann" ]
+
+  check "closing one of two same-name sockets keeps that name present" do
+    id <- Durable.newUniqueId rooms
+    let chat = Durable.get rooms id
+    firstLog <- liftEffect $ Ref.new []
+    secondLog <- liftEffect $ Ref.new []
+    stopFirst <- liftEffect $ Durable.listen rooms id "ann" \signal -> Ref.modify_ (_ <> [ describe signal ]) firstLog
+    _ <- Rpc.run $ chat.snapshot unit
+    stopSecond <- liftEffect $ Durable.listen rooms id "ann" \signal -> Ref.modify_ (_ <> [ describe signal ]) secondLog
+    _ <- Rpc.run $ chat.snapshot unit
+    liftEffect stopFirst
+    after <- Rpc.run $ chat.snapshot unit
+    seen <- liftEffect $ Ref.read secondLog
+    liftEffect stopSecond
+    pure $ map _.presence after == Right [ "ann" ]
+      && Array.length (Array.filter (_ == "presence [\"ann\"]") seen) == 2
 
   check "unique ids do not collide with names" $ succeeds do
     id <- liftAff $ Durable.newUniqueId rooms
     let byId = Durable.get rooms id
     let byName = Durable.getByName rooms (Durable.idToString id)
     _ <- byId.post { author: "ann", text: "only here", images: [], replyTo: Nothing }
-    other <- Rpc.infallible $ byName.history unit
-    pure $ length other == 0 && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
+    other <- Rpc.infallible $ byName.snapshot unit
+    pure $ length other.messages == 0 && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
 
   check "room migration imports legacy keys once and deletes both" do
     let current = (chatMessage 7 "ann" 7.0 Nothing) { text = "current", images = [ 4 ], mentions = [], reactions = [ { emoji: "👍", by: [ "bob" ] } ] }
@@ -139,9 +155,9 @@ main = launchAff_ do
     _ <- Rpc.run $ (Durable.get bots id).post { author: "ann", text: "hey @ai, who is here?", images: [], replyTo: Nothing }
     Simulator.advance timeline (Milliseconds 0.0)
     seen <- liftEffect $ Ref.read logs
-    history <- Rpc.run $ (Durable.get bots id).history unit
-    pure $ seen == [ "opened", "joined ann", "message hey @ai, who is here?", "typing ai", "message hello ann, just us two" ]
-      && ((map _.author <$> history) == Right [ "ann", "ai" ])
+    snapshot <- Rpc.run $ (Durable.get bots id).snapshot unit
+    pure $ seen == [ "opened", "presence [\"ann\"]", "message hey @ai, who is here?", "typing ai", "message hello ann, just us two" ]
+      && ((map (map _.author <<< _.messages) snapshot) == Right [ "ann", "ai" ])
 
   check "assistant triggers use parsed exact mentions" do
     quietModel <- Model.scripted []
@@ -158,8 +174,8 @@ main = launchAff_ do
       , replyTo: Nothing
       }
     Simulator.advance timeline (Milliseconds 0.0)
-    history <- Rpc.run $ chat.history unit
-    pure $ map (map _.author) history == Right [ "ann" ]
+    snapshot <- Rpc.run $ chat.snapshot unit
+    pure $ map (map _.author <<< _.messages) snapshot == Right [ "ann" ]
 
   check "assistant matching ignores case and keeps only the latest pending reply" do
     model <- Model.scripted
@@ -173,8 +189,8 @@ main = launchAff_ do
     _ <- Rpc.run $ chat.post { author: "ann", text: "first @AI", images: [], replyTo: Nothing }
     _ <- Rpc.run $ chat.post { author: "bob", text: "second @ai", images: [], replyTo: Nothing }
     Simulator.advance timeline (Milliseconds 0.0)
-    history <- Rpc.run $ chat.history unit
-    pure $ map (map _.replyTo) history == Right [ Nothing, Nothing, Just 2 ]
+    snapshot <- Rpc.run $ chat.snapshot unit
+    pure $ map (map _.replyTo <<< _.messages) snapshot == Right [ Nothing, Nothing, Just 2 ]
 
   check "replies must point at a real message; mentions are recorded" do
     let chat = Durable.getByName rooms "threads"
@@ -398,7 +414,6 @@ describe = case _ of
   Delivered event -> event # match
     { message: \message -> "message " <> message.text
     , updated: \message -> "updated " <> show (message.reactions <#> \reaction -> reaction.emoji <> "×" <> show (Array.length reaction.by))
-    , joined: ("joined " <> _)
-    , left: ("left " <> _)
+    , presence: \names -> "presence " <> show names
     , typing: ("typing " <> _)
     }

@@ -192,8 +192,10 @@ onSignal token signal = withRoomAt token $ const $ case signal of
   Delivered event -> event # match
     { message: onMessage token
     , updated: \message -> modifyRoomAt token \room -> room { messages = Map.insert message.id message room.messages }
-    , joined: \_ -> reload token
-    , left: \name -> modifyRoomAt token (\room -> room { typing = Map.delete name room.typing }) *> reload token
+    , presence: \presence -> modifyRoomAt token \room -> room
+        { members = presence
+        , typing = Map.filterKeys (_ `elem` presence) room.typing
+        }
     , typing: \name -> do
         { author } <- H.get
         at <- liftEffect nowMs
@@ -232,16 +234,13 @@ announce token message mentioned = do
 reload :: forall m. MonadAff m => RoomToken -> App m Unit
 reload token = withRoomAt token \room -> do
   pinned <- withMessages nearBottom
-  outcome <- liftAff $ Rpc.run do
-    messages <- Rpc.infallible $ room.api.history unit
-    members <- room.api.members unit
-    pure { messages, members }
+  outcome <- liftAff $ Rpc.run $ room.api.snapshot unit
   either
     (\failure -> modifyRoomAt token _ { error = Just $ Chat.describeFailure absurd failure })
-    ( \{ messages, members } -> do
+    ( \snapshot -> do
         modifyRoomAt token \current -> current
-          { messages = Map.union current.messages (byId messages)
-          , members = members
+          { messages = Map.union current.messages (byId snapshot.messages)
+          , members = snapshot.presence
           }
         when (fromMaybe false pinned)
           $ withRoomAt token

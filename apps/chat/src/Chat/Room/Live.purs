@@ -11,7 +11,7 @@ import Ai.Exa as Exa
 import Ai.Model as Model
 import Ai.Provider as Provider
 import Ai.Schema as Schema
-import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, UserNameError(..), assistantName, maxTextLength, mkUserName, printUserName, room)
+import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, Snapshot, UserNameError(..), assistantName, maxTextLength, mkUserName, printUserName, room)
 import Chat.Room.Images as Images
 import Chat.Room.Store as Store
 import Cloudflare.Durable (Handlers, Init, Live, Runtime, State)
@@ -53,8 +53,7 @@ type Channels =
   { all :: Sockets (Variant RoomEvents)
   , message :: Sockets Message
   , updated :: Sockets Message
-  , joined :: Sockets String
-  , left :: Sockets String
+  , presence :: Sockets (Array String)
   , typing :: Sockets String
   }
 
@@ -63,8 +62,7 @@ channels all =
   { all
   , message: cmap (inj (Proxy :: Proxy "message")) all
   , updated: cmap (inj (Proxy :: Proxy "updated")) all
-  , joined: cmap (inj (Proxy :: Proxy "joined")) all
-  , left: cmap (inj (Proxy :: Proxy "left")) all
+  , presence: cmap (inj (Proxy :: Proxy "presence")) all
   , typing: cmap (inj (Proxy :: Proxy "typing")) all
   }
 
@@ -98,15 +96,14 @@ handlersFor r =
   Durable.handlers
     { post: post r
     , react: react r
-    , history: \_ -> liftRuntime $ Store.snapshot r.store
-    , members: \_ -> members r
+    , snapshot: snapshot r
     , typing: Sockets.broadcast r.emit.typing
     }
     `Durable.withHooks`
       ( Durable.alarmHook (answer r)
           <> Images.hooks r.images
-          <> Durable.connectHook (Sockets.broadcast r.emit.joined <<< _.tag)
-          <> Durable.disconnectHook (Sockets.broadcast r.emit.left <<< _.tag)
+          <> Durable.connectHook (const $ broadcastPresence r)
+          <> Durable.disconnectHook (const $ broadcastPresence r)
       )
 
 -- Storage ---------------------------------------------------------------------
@@ -134,6 +131,15 @@ record r new = do
   Images.attach r.images message.sentAt new.images
   Sockets.broadcast r.emit.message message
   pure message
+
+snapshot :: Room -> Unit -> Rpc Void Snapshot
+snapshot r _ = do
+  messages <- liftRuntime $ Store.snapshot r.store
+  presence <- members r
+  pure { messages, presence }
+
+broadcastPresence :: Room -> Runtime Unit
+broadcastPresence r = members r >>= Sockets.broadcast r.emit.presence
 
 -- | Validate, record, and queue a reply if the assistant was mentioned.
 post :: Room -> NewMessage -> Rpc PostError Message

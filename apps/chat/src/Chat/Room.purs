@@ -6,6 +6,7 @@ module Chat.Room
   , Reaction
   , RoomApi
   , RoomEvents
+  , Snapshot
   , module Domain
   , describePostError
   , describeReactError
@@ -44,6 +45,7 @@ type Message =
   }
 
 type NewMessage = { author :: String, text :: String, images :: Array Int, replyTo :: Maybe Int }
+type Snapshot = { messages :: Array Message, presence :: Array String }
 
 data PostError
   = AuthorRequired
@@ -159,23 +161,21 @@ maxTextLength = 4000
 type RoomApi =
   ( post :: NewMessage -> Rpc PostError Message
   , react :: { id :: Int, emoji :: String, by :: String } -> Rpc ReactError Message
-  , history :: Unit -> Rpc NoError (Array Message)
-  , members :: Unit -> Rpc NoError (Array String)
+  , snapshot :: Unit -> Rpc NoError Snapshot
   , typing :: String -> Rpc NoError Unit
   )
 
--- | Pushed to every open socket. `updated` carries a message whose
--- | reactions changed; `joined`, `left` and `typing` carry a name.
+-- | Pushed to every open socket. Presence is an absolute, deduplicated
+-- | projection, so duplicate sockets for one name cannot create false leaves.
 type RoomEvents =
   ( message :: Message
   , updated :: Message
-  , joined :: String
-  , left :: String
+  , presence :: Array String
   , typing :: String
   )
 
 room :: Object "Room" RoomApi RoomEvents
 room =
-  Durable.object { post: method, react: method, history: method, members: method, typing: method }
+  Durable.object { post: method, react: method, snapshot: method, typing: method }
     `Durable.emitting`
-      { message: Durable.event, updated: Durable.event, joined: Durable.event, left: Durable.event, typing: Durable.event }
+      { message: Durable.event, updated: Durable.event, presence: Durable.event, typing: Durable.event }
