@@ -29,7 +29,7 @@ import Data.Foldable (traverse_)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap)
 import Data.Profunctor (lcmap)
-import Data.String (Pattern(..), length, stripPrefix, toLower, trim)
+import Data.String (Pattern(..), contains, length, stripPrefix, toLower, trim)
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple.Nested ((/\))
 import Effect.Aff.Class (liftAff)
@@ -76,6 +76,13 @@ open state = do
   columns <- Sql.query state imageColumns unit
   unless (any (_ == "uploaded_at") columns) $ Sql.execute state addUploadedAt unit
   unless (any (_ == "attached_at") columns) $ Sql.execute state addAttachedAt unit
+  definition <- Sql.one state imageDefinition unit
+  unless (contains (Pattern "AUTOINCREMENT") definition) $ Sql.batch state
+    [ Sql.command createImagesNext unit
+    , Sql.command copyImages unit
+    , Sql.command dropImages unit
+    , Sql.command renameImages unit
+    ]
   pure $ Images state
 
 hooks :: Images -> Hooks
@@ -143,6 +150,30 @@ addUploadedAt = Sql.statement "ALTER TABLE images ADD COLUMN uploaded_at REAL NO
 
 addAttachedAt :: Statement Unit Unit
 addAttachedAt = Sql.statement "ALTER TABLE images ADD COLUMN attached_at REAL" Sql.noParams (pure unit)
+
+imageDefinition :: Statement Unit String
+imageDefinition = Sql.statement
+  "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'images'"
+  Sql.noParams
+  (Sql.columnOf "sql")
+
+createImagesNext :: Statement Unit Unit
+createImagesNext = Sql.statement
+  "CREATE TABLE images_next (id INTEGER PRIMARY KEY AUTOINCREMENT, mime TEXT NOT NULL, data TEXT NOT NULL, uploaded_at REAL NOT NULL, attached_at REAL)"
+  Sql.noParams
+  (pure unit)
+
+copyImages :: Statement Unit Unit
+copyImages = Sql.statement
+  "INSERT INTO images_next (id, mime, data, uploaded_at, attached_at) SELECT id, mime, data, uploaded_at, attached_at FROM images"
+  Sql.noParams
+  (pure unit)
+
+dropImages :: Statement Unit Unit
+dropImages = Sql.statement "DROP TABLE images" Sql.noParams (pure unit)
+
+renameImages :: Statement Unit Unit
+renameImages = Sql.statement "ALTER TABLE images_next RENAME TO images" Sql.noParams (pure unit)
 
 insertImage :: Statement { mime :: String, data :: String, uploadedAt :: Number } Int
 insertImage = lcmap (\i -> (i.mime /\ i.data) /\ i.uploadedAt) $ Sql.statement

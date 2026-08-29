@@ -83,6 +83,17 @@ main = launchAff_ do
       Left (PlatformError (Runtime.PlatformError { operation })) -> take 3 operation == "sql"
       _ -> false
 
+  check "Sql.one accepts one row and rejects zero or many" do
+    let book = Durable.getByName journals "book"
+    one <- Rpc.run $ book.oneEntry "food"
+    none <- Rpc.run $ book.oneEntry "nobody"
+    many <- Rpc.run $ book.oneEntry "rent"
+    let
+      rejected = case _ of
+        Left (PlatformError (Runtime.PlatformError { operation })) -> take 7 operation == "sql one"
+        _ -> false
+    pure $ one == Right { id: 3, amount: 45 } && rejected none && rejected many
+
   check "deleteAll drops sql tables too" $ succeeds do
     let book = Durable.getByName journals "book"
     _ <- book.reset unit

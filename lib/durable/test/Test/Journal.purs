@@ -24,6 +24,7 @@ type JournalApi =
   ( record :: { account :: String, amount :: Int } -> Rpc NoError Unit
   , balance :: String -> Rpc NoError Int
   , entries :: String -> Rpc NoError (Array Entry)
+  , oneEntry :: String -> Rpc NoError Entry
   , mistype :: String -> Rpc NoError String
   , reset :: Unit -> Rpc NoError Unit
   )
@@ -33,6 +34,7 @@ journal = Durable.object
   { record: method
   , balance: method
   , entries: method
+  , oneEntry: method
   , mistype: method
   , reset: method
   }
@@ -77,8 +79,9 @@ journalLive =
         Sql.execute state createTable unit
         pure
           { record: Sql.execute state insert
-          , balance: \account -> fromMaybe 0 <$> Sql.first state total account
+          , balance: Sql.one state total
           , entries: Sql.query state byAccount
+          , oneEntry: Sql.one state byAccount
           , mistype: \account -> fromMaybe "" <$> Sql.first state mistyped account
           , reset: \_ -> do
               Storage.deleteAll state

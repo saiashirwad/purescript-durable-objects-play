@@ -7,25 +7,31 @@ import Ai.Model as Model
 import Chat.Room (PostError(..), ReactError(..), RoomEvents)
 import Chat.Room as ChatRoom
 import Chat.Room.Images as Images
+import Chat.Room.Migrations (LegacyMessage)
+import Chat.Room.Store as Store
 import Chat.Room.Live (roomLive, roomLiveWith)
 import Chat.Page.Composer as Composer
 import Chat.Page.Messages as Messages
-import Cloudflare.Durable (Signal(..))
+import Cloudflare.Durable (Object, Signal(..))
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Codec (codec)
 import Cloudflare.Durable.Core (Live(..))
-import Cloudflare.Durable.Rpc (Rpc, RpcFailure(..))
+import Cloudflare.Durable.Rpc (NoError, Rpc, RpcFailure(..), method)
+import Cloudflare.Durable.Sql (Statement)
+import Cloudflare.Durable.Sql as Sql
 import Cloudflare.Durable.Rpc as Rpc
+import Cloudflare.Durable.Runtime (liftRuntime)
 import Cloudflare.Durable.Simulator as Simulator
+import Cloudflare.Durable.Storage as Storage
 import Cloudflare.Worker as Worker
 import Data.Argonaut.Core as J
 import Data.Array as Array
 import Data.Codec.Argonaut as CA
 import Data.Array (length)
 import Data.Either (Either(..))
-import Data.Int as Int
+import Data.Foldable (for_)
 import Data.Map as Map
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), isJust)
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple (Tuple(..))
 import Data.String.CodeUnits as CodeUnits
@@ -100,6 +106,21 @@ main = launchAff_ do
     _ <- byId.post { author: "ann", text: "only here", images: [], replyTo: Nothing }
     other <- Rpc.infallible $ byName.history unit
     pure $ length other == 0 && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
+
+  check "room migration imports legacy keys once and deletes both" do
+    let current = (chatMessage 7 "ann" 7.0 Nothing) { text = "current", images = [ 4 ], mentions = [], reactions = [ { emoji: "👍", by: [ "bob" ] } ] }
+    currentRooms <- Simulator.simulate $ seededStoreLive false (Just [ current ]) (Just [ { id: 1, author: "old", text: "ignored", sentAt: 1.0 } ])
+    currentId <- Durable.newUniqueId currentRooms
+    currentInspection <- Rpc.run $ (Durable.get currentRooms currentId).inspect unit
+    legacyRooms <- Simulator.simulate $ seededStoreLive false Nothing (Just [ { id: 3, author: "old", text: "hello @ann", sentAt: 3.0 } ])
+    legacyId <- Durable.newUniqueId legacyRooms
+    legacyInspection <- Rpc.run $ (Durable.get legacyRooms legacyId).inspect unit
+    pure
+      $ (map (\result -> map _.text result.messages) currentInspection == Right [ "current" ])
+          && (map (\result -> map _.reactions result.messages) currentInspection == Right [ [ { emoji: "👍", by: [ "bob" ] } ] ])
+          && (map (\result -> result.currentPresent || result.legacyPresent) currentInspection == Right false)
+          && (map (\result -> map _.mentions result.messages) legacyInspection == Right [ [ "ann" ] ])
+          && (map (\result -> result.currentPresent || result.legacyPresent) legacyInspection == Right false)
 
   timeline <- Simulator.clock
 
@@ -241,17 +262,26 @@ main = launchAff_ do
       && missingBody == "no such image"
       && Worker.status unmatched == 418
 
-  check "appendMessage owns message creation and history retention" do
+  check "SQL retention stays bounded and removes old image rows" do
+    let text = CodeUnits.fromCharArray $ Array.replicate ChatRoom.maxTextLength 'x'
     let
-      existing = Array.range 1 500 <#> \id -> chatMessage id "ann" (Int.toNumber id) Nothing
-      Tuple appended retained = ChatRoom.appendMessage 501.0
-        { author: "bob", text: "hello @ann", images: [], replyTo: Just 500 }
-        existing
-    pure $ appended.id == 501
-      && appended.mentions == [ "ann" ]
-      && appended.reactions == []
-      && Array.length retained == 500
-      && map _.id (Array.head retained) == Just 2
+      stored = Array.range 1 500 <#> \id ->
+        (chatMessage id "ann" 1.0 Nothing) { images = if id == 1 then [ 1 ] else [] }
+    retainedRooms <- Simulator.simulate $ seededStoreLive true (Just stored) Nothing
+    id <- Durable.newUniqueId retainedRooms
+    posted <- Rpc.run $ (Durable.get retainedRooms id).post { author: "ann", text, images: [], replyTo: Nothing }
+    inspection <- Rpc.run $ (Durable.get retainedRooms id).inspect unit
+    removedImage <- Durable.http retainedRooms id $ Worker.requestTo "http://room/image/1"
+    replacement <- Durable.http retainedRooms id $ Worker.requestWith
+      { url: "http://room/image", method: "POST", contentType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" }
+    replacementBody <- Worker.responseText replacement
+    pure $ map _.id posted == Right 501
+      && (map (Array.length <<< _.messages) inspection == Right 500)
+      && (map (map _.id <<< Array.head <<< _.messages) inspection == Right (Just 2))
+      && (map (map _.id <<< Array.last <<< _.messages) inspection == Right (Just 501))
+      && (map _.currentPresent inspection == Right false)
+      && Worker.status removedImage == 404
+      && replacementBody == "{\"id\":2}"
 
   check "threaded marks only close messages from the same author" do
     let
@@ -311,6 +341,54 @@ succeeds :: forall e. Show e => Rpc e Boolean -> Aff Boolean
 succeeds call = Rpc.run call >>= case _ of
   Right passed -> pure passed
   Left failure -> liftEffect $ throw $ "unexpected failure: " <> show failure
+
+type StoreTestApi =
+  ( inspect :: Unit -> Rpc NoError { messages :: Array ChatRoom.Message, currentPresent :: Boolean, legacyPresent :: Boolean }
+  , post :: ChatRoom.NewMessage -> Rpc NoError ChatRoom.Message
+  )
+
+storeTestObject :: Object "StoreTest" StoreTestApi ()
+storeTestObject = Durable.object { inspect: method, post: method }
+
+currentMessagesKey :: Storage.Key (Array ChatRoom.Message)
+currentMessagesKey = Storage.key "messages.v2"
+
+legacyMessagesKey :: Storage.Key (Array LegacyMessage)
+legacyMessagesKey = Storage.key "messages"
+
+seededStoreLive :: Boolean -> Maybe (Array ChatRoom.Message) -> Maybe (Array LegacyMessage) -> Live "StoreTest" StoreTestApi ()
+seededStoreLive seedImage current legacy = Durable.implementWith storeTestObject $ ado
+  state <- Durable.state
+  in
+    do
+      Sql.execute state createTestImages unit
+      when seedImage $ Sql.execute state insertTestImage unit
+      for_ current $ Storage.put state currentMessagesKey
+      for_ legacy $ Storage.put state legacyMessagesKey
+      images <- Images.open state
+      store <- Store.open state
+      pure $
+        Durable.handlers
+          { inspect: \_ -> do
+              messages <- liftRuntime $ Store.snapshot store
+              currentPresent <- liftRuntime $ isJust <$> Storage.get state currentMessagesKey
+              legacyPresent <- liftRuntime $ isJust <$> Storage.get state legacyMessagesKey
+              pure { messages, currentPresent, legacyPresent }
+          , post: liftRuntime <<< Store.post store
+          }
+          `Durable.withHooks` Images.hooks images
+
+createTestImages :: Statement Unit Unit
+createTestImages = Sql.statement
+  "CREATE TABLE IF NOT EXISTS images (id INTEGER PRIMARY KEY AUTOINCREMENT, mime TEXT NOT NULL, data TEXT NOT NULL, uploaded_at REAL NOT NULL, attached_at REAL)"
+  Sql.noParams
+  (pure unit)
+
+insertTestImage :: Statement Unit Unit
+insertTestImage = Sql.statement
+  "INSERT INTO images (id, mime, data, uploaded_at, attached_at) VALUES (1, 'image/png', 'iVBORw0KGgo=', 0, 0)"
+  Sql.noParams
+  (pure unit)
 
 describe :: Signal (Variant RoomEvents) -> String
 describe = case _ of

@@ -71,6 +71,7 @@ newtype State = State
   , setAlarm :: Instant -> Aff Unit
   , getAlarm :: Aff (Maybe Instant)
   , deleteAlarm :: Aff Unit
+  , sqlBatch :: Array { sql :: String, bindings :: Array Json } -> Aff (Array (Array Json))
   , sql :: String -> Array Json -> Aff (Array Json)
   }
 

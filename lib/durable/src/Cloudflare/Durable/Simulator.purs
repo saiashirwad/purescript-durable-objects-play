@@ -42,6 +42,7 @@ import Effect.Ref as Ref
 foreign import data Database :: Type
 foreign import openMemory :: Effect Database
 foreign import exec :: Database -> String -> Array Json -> Effect (Array Json)
+foreign import execBatch :: Database -> Array { sql :: String, bindings :: Array Json } -> Effect (Array (Array Json))
 foreign import dropAll :: Database -> Effect Unit
 
 -- Time -----------------------------------------------------------------------
@@ -116,6 +117,7 @@ memoryState (Clock c) = do
       , getAlarm: liftEffect $ Ref.read alarm
       , deleteAlarm: liftEffect $ Ref.write Nothing alarm
       , sql: \text bindings -> liftEffect $ exec db text bindings
+      , sqlBatch: liftEffect <<< execBatch db
       }
   pure { state, alarm }
   where

@@ -11,9 +11,9 @@ import Ai.Exa as Exa
 import Ai.Model as Model
 import Ai.Provider as Provider
 import Ai.Schema as Schema
-import Markdown as Markdown
-import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, UserNameError(..), appendMessage, assistantName, maxTextLength, mkUserName, printUserName, room, toggleReaction)
+import Chat.Room (Message, NewMessage, PostError(..), ReactError(..), RoomApi, RoomEvents, UserNameError(..), assistantName, maxTextLength, mkUserName, printUserName, room)
 import Chat.Room.Images as Images
+import Chat.Room.Store as Store
 import Cloudflare.Durable (Handlers, Init, Live, Runtime, State)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Alarm as Alarm
@@ -22,7 +22,7 @@ import Cloudflare.Durable.Runtime (class MonadRuntime, liftRuntime)
 import Cloudflare.Durable.Sockets (Sockets)
 import Cloudflare.Durable.Sockets as Sockets
 import Cloudflare.Durable.Storage as Storage
-import Data.Array (any, find, last, nub, null, takeEnd)
+import Data.Array (any, last, nub, null, takeEnd)
 import Data.DateTime.Instant (unInstant)
 import Data.Either (Either(..), either)
 import Data.Foldable (foldMap, for_)
@@ -31,14 +31,9 @@ import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Newtype (unwrap)
 import Data.String (joinWith, length, toLower, trim)
 import Data.Time.Duration (Milliseconds(..))
-import Data.Tuple.Nested ((/\))
 import Data.Variant (Variant, inj)
 import Effect.Aff (Aff)
 import Effect.Aff.Class (liftAff)
-import Effect.Class (liftEffect)
-import Effect.Now (now)
-import Effect.Ref (Ref)
-import Effect.Ref as Ref
 import Type.Proxy (Proxy(..))
 
 -- The room -------------------------------------------------------------------
@@ -46,7 +41,7 @@ import Type.Proxy (Proxy(..))
 -- | Everything a handler needs, built once per activation.
 type Room =
   { state :: State
-  , messages :: Ref (Array Message)
+  , store :: Store.Store
   , images :: Images.Images
   , emit :: Channels
   , assistant :: Maybe (Model Aff)
@@ -91,19 +86,19 @@ open modelFor = ado
   in
     do
       images <- Images.open state
-      history <- loadMessages state
-      messages <- liftEffect $ Ref.new history
-      attachedAt <- liftEffect $ unwrap <<< unInstant <$> now
+      store <- Store.open state
+      history <- Store.snapshot store
+      attachedAt <- unwrap <<< unInstant <$> Alarm.now state
       for_ history \message -> Images.attach images attachedAt message.images
       Images.cleanup images
-      pure { state, messages, images, emit: channels sockets, assistant: modelFor <$> apiKey, search: Exa.search <$> exaKey }
+      pure { state, store, images, emit: channels sockets, assistant: modelFor <$> apiKey, search: Exa.search <$> exaKey }
 
 handlersFor :: Room -> Handlers RoomApi
 handlersFor r =
   Durable.handlers
     { post: post r
     , react: react r
-    , history: \_ -> liftEffect $ Ref.read r.messages
+    , history: \_ -> liftRuntime $ Store.snapshot r.store
     , members: \_ -> members r
     , typing: Sockets.broadcast r.emit.typing
     }
@@ -116,59 +111,27 @@ handlersFor r =
 
 -- Storage ---------------------------------------------------------------------
 
-messagesKey :: Storage.Key (Array Message)
-messagesKey = Storage.key "messages.v2"
-
--- | The shape before replies, images and reactions; read once and upgraded.
-type Legacy = { id :: Int, author :: String, text :: String, sentAt :: Number }
-
-legacyKey :: Storage.Key (Array Legacy)
-legacyKey = Storage.key "messages"
-
-upgrade :: Legacy -> Message
-upgrade m =
-  { id: m.id, author: m.author, text: m.text, images: [], replyTo: Nothing, mentions: Markdown.mentions m.text, reactions: [], sentAt: m.sentAt }
-
 pendingKey :: Storage.Key Int
 pendingKey = Storage.key "assistant.pending.v2"
 
 legacyPendingKey :: Storage.Key (Array Int)
 legacyPendingKey = Storage.key "assistant.pending"
 
--- | Prefer v2 history. Persist a legacy upgrade but keep the legacy data.
-loadMessages :: State -> Runtime (Array Message)
-loadMessages state = Storage.get state messagesKey >>= case _ of
-  Just messages -> pure messages
-  Nothing -> Storage.get state legacyKey >>= case _ of
-    Nothing -> pure []
-    Just legacy -> do
-      let messages = upgrade <$> legacy
-      Storage.put state messagesKey messages
-      pure messages
-
 loadPending :: State -> Runtime (Maybe Int)
 loadPending state = Storage.get state pendingKey >>= case _ of
   Just id -> pure $ Just id
   Nothing -> last <<< fromMaybe [] <$> Storage.get state legacyPendingKey
-
-save :: Room -> Array Message -> Runtime Unit
-save r all = do
-  Storage.put r.state messagesKey all
-  liftEffect $ Ref.write all r.messages
 
 -- Messages ----------------------------------------------------------------------
 
 members :: forall m. MonadRuntime m => Room -> m (Array String)
 members r = nub <<< map _.tag <$> Sockets.connected r.emit.all
 
--- | Stamp, interpret the pure append transition, store, and broadcast.
+-- | Store one message and broadcast it after every write succeeds.
 record :: Room -> NewMessage -> Runtime Message
 record r new = do
-  sentAt <- liftEffect $ unwrap <<< unInstant <$> now
-  all <- liftEffect $ Ref.read r.messages
-  let message /\ messages = appendMessage sentAt new all
-  save r messages
-  Images.attach r.images sentAt new.images
+  message <- Store.post r.store new
+  Images.attach r.images message.sentAt new.images
   Sockets.broadcast r.emit.message message
   pure message
 
@@ -184,9 +147,10 @@ post r new = do
     Right accepted -> pure accepted
   let author = printUserName user
   when (body == "" && null new.images) $ fail TextRequired
-  all <- liftEffect $ Ref.read r.messages
   when (length body > maxTextLength) $ fail TextTooLong
-  for_ new.replyTo \id -> unless (any (_.id >>> eq id) all) $ fail $ NoSuchReply id
+  for_ new.replyTo \id -> do
+    found <- liftRuntime $ Store.hasMessage r.store id
+    unless found $ fail $ NoSuchReply id
   for_ new.images \id -> do
     found <- liftRuntime $ Images.exists r.images id
     unless found $ fail $ NoSuchImage id
@@ -207,14 +171,10 @@ react r { id, emoji, by } = do
     Left UserNameReserved -> fail ReactorReserved
     Right accepted -> pure accepted
   let normalizedReactor = printUserName reactor
-  all <- liftEffect $ Ref.read r.messages
-  case find (_.id >>> eq id) all of
+  liftRuntime (Store.react r.store { id, emoji: normalizedEmoji, by: normalizedReactor }) >>= case _ of
     Nothing -> fail $ NoSuchMessage id
-    Just found -> do
-      let message = found { reactions = toggleReaction normalizedEmoji normalizedReactor found.reactions }
-      liftRuntime do
-        save r $ all <#> \m -> if m.id == id then message else m
-        Sockets.broadcast r.emit.updated message
+    Just message -> do
+      liftRuntime $ Sockets.broadcast r.emit.updated message
       pure message
 
 -- The assistant --------------------------------------------------------------------
@@ -247,7 +207,7 @@ answer r = do
     void $ Storage.delete r.state pendingKey
     void $ Storage.delete r.state legacyPendingKey
     Sockets.broadcast r.emit.typing assistantName
-    transcript <- recap <<< takeEnd 20 <$> liftEffect (Ref.read r.messages)
+    transcript <- recap <<< takeEnd 20 <$> Store.snapshot r.store
     reply <- maybe (pure $ Left $ Model.Misconfigured "DEEPSEEK_API_KEY is not set") (_ `invoke` transcript) (agentFor r)
     void $ record r
       { author: assistantName

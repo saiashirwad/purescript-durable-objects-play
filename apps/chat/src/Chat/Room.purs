@@ -7,12 +7,10 @@ module Chat.Room
   , RoomApi
   , RoomEvents
   , module Domain
-  , appendMessage
   , describePostError
   , describeReactError
   , maxTextLength
   , room
-  , toggleReaction
   ) where
 
 import Prelude
@@ -23,14 +21,12 @@ import Cloudflare.Durable.Codec (class HasCodec)
 import Chat.Room.Domain (UserNameError(..), describeUserNameError)
 import Chat.Room.Domain (UserName, UserNameError(..), assistantName, describeUserNameError, maxUserNameLength, mkUserName, printUserName) as Domain
 import Cloudflare.Durable.Rpc (NoError, Rpc, method)
-import Data.Array (elem, filter, find, last, null, snoc, takeEnd)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
-import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple)
 import Data.Tuple.Nested ((/\))
-import Markdown as Markdown
 
 type Reaction = { emoji :: String, by :: Array String }
 
@@ -159,29 +155,6 @@ tagged name print read =
 
 maxTextLength :: Int
 maxTextLength = 4000
-
--- | Add one message and return it with the retained room history.
-appendMessage :: Number -> NewMessage -> Array Message -> Tuple Message (Array Message)
-appendMessage sentAt new all = message /\ takeEnd 500 (snoc all message)
-  where
-  message =
-    { id: maybe 1 (_.id >>> (_ + 1)) (last all)
-    , author: new.author
-    , text: new.text
-    , images: new.images
-    , replyTo: new.replyTo
-    , mentions: Markdown.mentions new.text
-    , reactions: []
-    , sentAt
-    }
-
--- | Flip a reactor on an emoji. Remove a reaction when no reactor remains.
-toggleReaction :: String -> String -> Array Reaction -> Array Reaction
-toggleReaction emoji by reactions = case find (_.emoji >>> eq emoji) reactions of
-  Nothing -> snoc reactions { emoji, by: [ by ] }
-  Just _ -> filter (not <<< null <<< _.by) $ reactions <#> \reaction ->
-    if reaction.emoji /= emoji then reaction
-    else reaction { by = if by `elem` reaction.by then filter (_ /= by) reaction.by else snoc reaction.by by }
 
 type RoomApi =
   ( post :: NewMessage -> Rpc PostError Message

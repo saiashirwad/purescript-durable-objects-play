@@ -39,6 +39,7 @@ foreign import alarmSet :: Foreign -> Number -> Effect (Promise Unit)
 foreign import alarmGet :: Foreign -> Effect (Promise (Nullable Number))
 foreign import alarmDelete :: Foreign -> Effect (Promise Unit)
 foreign import sqlExec :: Foreign -> String -> Array Json -> Effect (Array Json)
+foreign import sqlBatch :: Foreign -> Array { sql :: String, bindings :: Array Json } -> Effect (Array (Array Json))
 foreign import variables :: Foreign -> Array String -> Effect (Object.Object String)
 foreign import call :: Foreign -> { kind :: String, value :: String } -> String -> Json -> Effect (Promise Json)
 foreign import unique :: Foreign -> Effect String
@@ -94,6 +95,7 @@ stateFromContext ctx = State
   , getAlarm: toAffE (alarmGet ctx) >>= traverse toInstant <<< toMaybe
   , deleteAlarm: toAffE (alarmDelete ctx)
   , sql: \text bindings -> liftEffect (sqlExec ctx text bindings)
+  , sqlBatch: liftEffect <<< sqlBatch ctx
   }
 
 toInstant :: Number -> Aff Instant

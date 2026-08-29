@@ -5,12 +5,17 @@
 -- | so row decoders combine with `<$>` and `<*>`.
 module Cloudflare.Durable.Sql
   ( Params
+  , Command
   , Decoder
   , Statement
   , column
+  , batch
+  , batchOne
   , columnOf
+  , command
   , execute
   , first
+  , one
   , noParams
   , param
   , paramOf
@@ -23,17 +28,18 @@ module Cloudflare.Durable.Sql
 import Prelude
 
 import Cloudflare.Durable.Codec (class HasCodec, codec)
-import Cloudflare.Durable.Runtime (class MonadRuntime, State(..), decodedOr, liftRuntime, platform)
+import Cloudflare.Durable.Runtime (class MonadRuntime, State(..), decodedOr, liftRuntime, platform, platformError)
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Core as J
 import Data.Array (head)
+import Data.Array as Array
 import Data.Codec.Argonaut (JsonCodec, JsonDecodeError(..))
 import Data.Codec.Argonaut as CA
 import Data.Divisible (conquer)
 import Data.Either (Either, note)
 import Data.Functor.Contravariant (cmap)
-import Data.Maybe (Maybe)
+import Data.Maybe (Maybe(..))
 import Data.Op (Op(..))
 import Data.Profunctor (class Profunctor)
 import Data.Traversable (traverse)
@@ -83,6 +89,30 @@ instance profunctorStatement :: Profunctor Statement where
 statement :: forall i o. String -> Params i -> Decoder o -> Statement i o
 statement sql params row = Statement { sql, params, row }
 
+newtype Command = Command { sql :: String, bindings :: Array Json }
+
+command :: forall i o. Statement i o -> i -> Command
+command (Statement { sql, params: Op encode }) input = Command { sql, bindings: encode input }
+
+batch :: forall m. MonadRuntime m => State -> Array Command -> m Unit
+batch (State state) commands = liftRuntime $ void $ platform "sql batch" $ state.sqlBatch $ commands <#> \(Command value) -> value
+
+-- | Run one row-returning statement and following writes in one synchronous
+-- | transaction. The leading statement must return exactly one row.
+batchOne :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> Array Command -> m o
+batchOne (State state) (Statement { sql, params: Op encode, row: Decoder decode }) input commands = liftRuntime do
+  let
+    operation = "sql batch one " <> show sql
+    all = [ { sql, bindings: encode input } ] <> (commands <#> \(Command value) -> value)
+  batches <- platform operation $ state.sqlBatch all
+  rows <- case Array.head batches of
+    Nothing -> platformError operation "batch returned no result set"
+    Just returned -> decodedOr operation $ traverse (runReaderT decode) returned
+  case rows of
+    [ row ] -> pure row
+    [] -> platformError operation "expected one row, received none"
+    many -> platformError operation $ "expected one row, received " <> show (Array.length many)
+
 query :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m (Array o)
 query (State s) (Statement { sql, params: Op encode, row: Decoder decode }) input = liftRuntime do
   let operation = "sql " <> show sql
@@ -91,6 +121,12 @@ query (State s) (Statement { sql, params: Op encode, row: Decoder decode }) inpu
 
 first :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m (Maybe o)
 first state stmt = map head <<< query state stmt
+
+one :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m o
+one state stmt@(Statement { sql }) input = query state stmt input >>= case _ of
+  [ row ] -> pure row
+  [] -> liftRuntime $ platformError ("sql one " <> show sql) "expected one row, received none"
+  rows -> liftRuntime $ platformError ("sql one " <> show sql) $ "expected one row, received " <> show (Array.length rows)
 
 execute :: forall m i o. MonadRuntime m => State -> Statement i o -> i -> m Unit
 execute state stmt = void <<< query state stmt
