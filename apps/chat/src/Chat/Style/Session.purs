@@ -7,7 +7,7 @@ module Chat.Style.Session
 
 import Prelude
 
-import Chat.Style.Foundation (hairline)
+import Chat.Style.Foundation (hairline, mutedText)
 import UI.Style (Sheet, Style, (:=), create, var)
 import UI.Style as Style
 import UI.Theme (tokens)
@@ -50,16 +50,12 @@ styles =
       , "margin" := "0"
       , "text-align" := "center"
       ]
-  , lead: create
-      [ "color" := var tokens.textMuted
-      , "margin" := "0"
+  , lead: mutedText <> create
+      [ "margin" := "0"
       , "text-align" := "center"
       , "text-wrap" := "balance"
       ]
-  , muted: create
-      [ "color" := var tokens.textMuted
-      , "margin" := "0"
-      ]
+  , muted: mutedText <> ("margin" := "0")
   , wide: "inline-size" := "100%"
   }
 

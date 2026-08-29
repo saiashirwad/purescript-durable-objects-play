@@ -10,9 +10,9 @@ module Chat.Page.Composer
 
 import Prelude
 
+import Chat.Page.Avatar (avatar)
 import Chat.Page.Browser (nowMs)
 import Chat.Page.Icons (imageIcon, replyIcon, sendIcon)
-import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (App, ComposerAction(..), ComposerState, ComposerStatus(..), RoomToken, RoomView, modifyRoom, modifyRoomAt, withRoom)
 import Chat.Room (ImageId, Message, MessageId, assistantName, printAuthor, printImageId)
 import Chat.Style.Composer (styles)
@@ -39,7 +39,7 @@ import Halogen.HTML.Properties as HP
 import Halogen.HTML.Properties.ARIA as ARIA
 import Markdown as Markdown
 import UI.Button as Button
-import UI.Core (Tone(..))
+import UI.Core (Size(..), Tone(..))
 import UI.Icon as Icon
 import UI.Input as Input
 import UI.Status as Status
@@ -60,6 +60,15 @@ composerRef = H.RefLabel "composer"
 
 fileRef :: H.RefLabel
 fileRef = H.RefLabel "file"
+
+small :: Button.Options
+small = Button.defaults { size = Small }
+
+quiet :: Button.Options
+quiet = small { tone = Quiet }
+
+hasText :: String -> Boolean
+hasText = not <<< String.null <<< String.trim
 
 composer :: forall w. String -> RoomView -> HH.HTML w ComposerAction -> HH.HTML w ComposerAction
 composer author room typing =
@@ -100,7 +109,7 @@ composer author room typing =
     ]
 
 sendable :: RoomView -> Boolean
-sendable room = not (blank room.composer.draft) || not (Array.null room.composer.attachments)
+sendable room = hasText room.composer.draft || not (Array.null room.composer.attachments)
 
 suggestionBar :: forall w. String -> RoomView -> HH.HTML w ComposerAction
 suggestionBar author room = case suggestions author (suggestionInput room) of
@@ -208,7 +217,7 @@ submit = whileEditing \room -> when (sendable room) do
     focusComposer
 
 pingTyping :: forall m. MonadAff m => App m Unit
-pingTyping = withRoom \room -> unless (blank room.composer.draft) do
+pingTyping = withRoom \room -> when (hasText room.composer.draft) do
   at <- liftEffect nowMs
   when (at - room.typingSentAt > typingThrottle) do
     modifyRoomAt room.token _ { typingSentAt = at }

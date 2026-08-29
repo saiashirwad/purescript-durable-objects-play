@@ -12,7 +12,7 @@ module Chat.Style.Room
 
 import Prelude
 
-import Chat.Style.Foundation (glass, gutters, hairline)
+import Chat.Style.Foundation (glass, gutters, hairline, mutedText, pill, smallText)
 import UI.Style (Sheet, Style, Var, (:=), create, var)
 import UI.Style as Style
 import UI.Theme (tokens)
@@ -94,19 +94,15 @@ styles =
       , "letter-spacing" := "-0.01em"
       , "margin" := "0"
       ]
-  , roomId: create
+  , roomId: mutedText <> create
       [ "background-color" := var tokens.tint
       , "border-radius" := var tokens.radiusSm
-      , "color" := var tokens.textMuted
       , "font-family" := var tokens.fontMono
       , "font-size" := "0.75rem"
       , "padding-block" := "0.15rem"
       , "padding-inline" := "0.4rem"
       ]
-  , count: create
-      [ "color" := var tokens.textMuted
-      , "font-size" := "0.8125rem"
-      ]
+  , count: mutedText <> ("font-size" := smallText)
   , members: create
       [ "align-items" := "center"
       , "display" := "flex"
@@ -118,15 +114,11 @@ styles =
       , "inline-size" := "1.5rem"
       ]
   , overlap: "margin-inline-start" := "-0.4rem"
-  , identity: create
-      [ "border-radius" := "999px"
-      , "padding-inline" := "0.25rem 0.75rem"
-      ]
-  , typing: create
+  , identity: pill <> ("padding-inline" := "0.25rem 0.75rem")
+  , typing: mutedText <> create
       [ "align-items" := "center"
-      , "color" := var tokens.textMuted
       , "display" := "flex"
-      , "font-size" := "0.8125rem"
+      , "font-size" := smallText
       , "gap" := var tokens.space2
       , "min-block-size" := "1.25rem"
       , "visibility" := "hidden"

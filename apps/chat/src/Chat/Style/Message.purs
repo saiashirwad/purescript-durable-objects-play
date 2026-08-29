@@ -18,7 +18,7 @@ module Chat.Style.Message
 
 import Prelude
 
-import Chat.Style.Foundation (gutters, hairline, wash)
+import Chat.Style.Foundation (bubbleMax, fastMotion, gutters, hairline, mutedText, pill, smallText, truncate, wash)
 import Chat.Style.Hook as Hook
 import UI.Style (Sheet, Style, (:=), create, var)
 import UI.Style as Style
@@ -99,7 +99,7 @@ styles =
       , "animation" := "chat-message-rise 200ms ease-out"
       , "display" := "flex"
       , "gap" := "0.625rem"
-      , "max-inline-size" := "min(80%,42rem)"
+      , "max-inline-size" := "min(80%," <> bubbleMax <> ")"
       ]
   , mine: create
       [ "align-self" := "flex-end"
@@ -122,10 +122,7 @@ styles =
       , "letter-spacing" := "-0.01em"
       , "margin" := "0"
       ]
-  , muted: create
-      [ "color" := var tokens.textMuted
-      , "margin" := "0"
-      ]
+  , muted: mutedText <> ("margin" := "0")
   , gutter: create
       [ "flex" := "none"
       , "inline-size" := "1.75rem"
@@ -161,9 +158,8 @@ styles =
   , mineJoined: "border-start-end-radius" := var tokens.radiusSm
   , theirsJoined: "border-start-start-radius" := var tokens.radiusSm
   , mentionedBubble: "box-shadow" := "0 0 0 2px color-mix(in oklab," <> var tokens.accent <> " 55%,transparent)," <> var tokens.shadow
-  , author: create
-      [ "color" := var tokens.textMuted
-      , "font-size" := "0.75rem"
+  , author: mutedText <> create
+      [ "font-size" := "0.75rem"
       , "font-weight" := "600"
       , "letter-spacing" := "0.01em"
       ]
@@ -244,7 +240,7 @@ styles =
       , "border-radius" := "0.5rem"
       , "display" := "flex"
       , "flex-direction" := "column"
-      , "font-size" := "0.8125rem"
+      , "font-size" := smallText
       , "gap" := "0"
       , "inline-size" := "100%"
       , "justify-content" := "flex-start"
@@ -263,13 +259,7 @@ styles =
       [ "font-size" := "0.75rem"
       , "font-weight" := "600"
       ]
-  , quoteText: create
-      [ "color" := var tokens.textMuted
-      , "max-inline-size" := "100%"
-      , "overflow" := "hidden"
-      , "text-overflow" := "ellipsis"
-      , "white-space" := "nowrap"
-      ]
+  , quoteText: mutedText <> truncate <> ("max-inline-size" := "100%")
   , mineQuoteText: create
       [ "color" := "inherit"
       , "opacity" := "0.85"
@@ -281,11 +271,10 @@ styles =
       , "margin-block-start" := "0.3rem"
       ]
   , mineReactions: "justify-content" := "flex-end"
-  , reaction: create
+  , reaction: pill <> create
       [ "background-color" := var tokens.surface
       , "border-color" := var tokens.border
-      , "border-radius" := "999px"
-      , "font-size" := "0.8125rem"
+      , "font-size" := smallText
       , "min-block-size" := "1.75rem"
       , "padding-block" := "0.1rem"
       , "padding-inline" := "0.55rem"
@@ -295,15 +284,13 @@ styles =
       , "border-color" := var tokens.accent
       , "color" := var tokens.text
       ]
-  , reactionCount: create
-      [ "color" := var tokens.textMuted
-      , "font-size" := "0.7rem"
+  , reactionCount: mutedText <> create
+      [ "font-size" := "0.7rem"
       , "font-variant-numeric" := "tabular-nums"
       ]
-  , actions: create
+  , actions: pill <> create
       [ "background-color" := var tokens.surfaceRaised
       , "border" := hairline
-      , "border-radius" := "999px"
       , "box-shadow" := var tokens.shadow
       , "display" := "inline-flex"
       , "gap" := "0.1rem"
@@ -312,7 +299,7 @@ styles =
       , "opacity" := "0"
       , "padding" := "0.15rem"
       , "position" := "absolute"
-      , "transition" := "opacity 120ms ease"
+      , "transition" := "opacity " <> fastMotion <> " ease"
       , "z-index" := "1"
       ]
   , mineActions: create

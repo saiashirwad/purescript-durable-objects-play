@@ -11,19 +11,19 @@ module Chat.Page.Room
 import Prelude
 
 import Chat.Session (RoomId)
+import Chat.Page.Avatar (avatar)
 import Chat.Session as Session
 import Chat.Page.Browser (NotificationPermission(..), away, copyText, interval, location, nearBottom, notify, nowMs, scrollToEnd, scrollToId, setTitle)
 import Chat.Page.Icons (bellIcon, linkIcon)
-import Chat.Page.Shared (avatar, blank, quiet, small)
 import Chat.Page.Types (Action(..), App, ComposerStatus(..), RoomAction(..), RoomToken, RoomView, View(..), advanceRoomToken, modifyRoomAt, withRoom)
-import Chat.Room (Message, MessageId, RoomEvents, printAuthor, printMessageId)
+import Chat.Room (Message, MessageId, RoomEvents, mkUserName, printAuthor, printMessageId)
 import Chat.Style.Hook as Hook
 import Chat.Style.Room (Connection(..), styles)
 import Chat.Style.Room as RoomStyle
 import Cloudflare.Durable (Signal(..))
 import Data.Array (elem, length, mapWithIndex)
 import Data.Array as Array
-import Data.Either (either)
+import Data.Either (either, isLeft)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Monoid (guard)
@@ -44,6 +44,7 @@ import Halogen.HTML.Properties.ARIA as ARIA
 import Halogen.Subscription (makeEmitter)
 import Markdown as Markdown
 import UI.Button as Button
+import UI.Core (Size(..), Tone(..))
 import UI.Icon as Icon
 import UI.Style (css, inlineVars)
 import Web.HTML.HTMLElement (HTMLElement)
@@ -63,6 +64,12 @@ type HeaderState =
 
 messagesRef :: H.RefLabel
 messagesRef = H.RefLabel "messages"
+
+small :: Button.Options
+small = Button.defaults { size = Small }
+
+quiet :: Button.Options
+quiet = small { tone = Quiet }
 
 roomView :: forall action w. ViewActions action -> HeaderState -> RoomView -> HH.HTML w action -> HH.HTML w action -> HH.HTML w action
 roomView actions state room messages composer =
@@ -149,7 +156,7 @@ enter :: forall m. MonadAff m => RoomId -> App m Unit
 enter id = do
   liftEffect $ Location.setHash (Session.route id) =<< location
   state <- H.get
-  if blank state.author then H.modify_ _ { view = Joining { id, name: "", error: Nothing } }
+  if isLeft (mkUserName state.author) then H.modify_ _ { view = Joining { id, name: "", error: Nothing } }
   else do
     let token = state.nextRoomToken
     H.modify_ _ { nextRoomToken = advanceRoomToken token }

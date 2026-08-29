@@ -3,6 +3,7 @@ module Test.Chat.Main where
 import Prelude
 
 import Ai (Finish(..), Message(..))
+import Chat.Client as BrowserClient
 import Ai.Model as Model
 import Chat.Room (PostError(..), ReactError(..), RoomEvents)
 import Chat.Room as ChatRoom
@@ -138,7 +139,7 @@ main = launchAff_ do
       $ length other.messages == 0
           && Just id == Just (Durable.idFromString rooms (Durable.idToString id))
           && BrowserSession.fromRoute (BrowserSession.route id) == Just id
-          && session.imageUrl (imageId 1) == "/rpc/Room/id/" <> BrowserSession.printRoomId id <> "/http/image/1"
+          && session.imageUrl (imageId 1) == BrowserClient.imageUrl id (imageId 1)
 
   check "room migration imports legacy keys once and deletes both" do
     let current = (chatMessage 7 "ann" 7.0 Nothing) { text = "current", images = [ imageId 4 ], mentions = [], reactions = [ { emoji: "👍", by: [ "bob" ] } ] }

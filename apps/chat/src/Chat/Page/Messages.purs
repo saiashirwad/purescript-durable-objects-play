@@ -9,9 +9,9 @@ module Chat.Page.Messages
 
 import Prelude
 
+import Chat.Page.Avatar (avatar)
 import Chat.Page.Browser (TimeFormatter)
 import Chat.Page.Icons (replyIcon)
-import Chat.Page.Shared (avatar, quiet)
 import Chat.Room (Message, MessageId, isAssistant, printAuthor, printMessageId)
 import Chat.Session (RoomSession)
 import Chat.Style.Hook as Hook
@@ -33,6 +33,7 @@ import Halogen.HTML.Properties.ARIA as ARIA
 import Markdown (Block(..), Inline(..))
 import Markdown as Markdown
 import UI.Button as Button
+import UI.Core (Size(..), Tone(..))
 import UI.Icon as Icon
 import UI.Style (css)
 
@@ -41,6 +42,9 @@ type Actions action =
   , jumpTo :: MessageId -> action
   , reply :: Maybe MessageId -> action
   }
+
+quiet :: Button.Options
+quiet = Button.defaults { size = Small, tone = Quiet }
 
 type MessageRoom row =
   { session :: RoomSession

@@ -7,7 +7,7 @@ module Chat.Style.Composer
 
 import Prelude
 
-import Chat.Style.Foundation (glass, gutters, hairline)
+import Chat.Style.Foundation (fastMotion, glass, gutters, hairline, mutedText, pill, smallText, truncate)
 import UI.Style (Sheet, Style, (:=), create, on, var)
 import UI.Style as Style
 import UI.Theme (tokens)
@@ -42,24 +42,17 @@ styles =
       , "position" := "sticky"
       , "z-index" := "2"
       ]
-  , replyChip: create
+  , replyChip: mutedText <> create
       [ "align-items" := "center"
       , "background-color" := var tokens.tint
       , "border-radius" := var tokens.radiusSm
-      , "color" := var tokens.textMuted
       , "display" := "flex"
-      , "font-size" := "0.8125rem"
+      , "font-size" := smallText
       , "gap" := var tokens.space2
       , "padding-block" := "0.3rem"
       , "padding-inline" := "0.6rem"
       ]
-  , replyChipText: create
-      [ "flex" := "1"
-      , "min-inline-size" := "0"
-      , "overflow" := "hidden"
-      , "text-overflow" := "ellipsis"
-      , "white-space" := "nowrap"
-      ]
+  , replyChipText: ("flex" := "1") <> truncate
   , attachments: create
       [ "align-items" := "center"
       , "display" := "flex"
@@ -86,20 +79,16 @@ styles =
       , "padding-inline" := "0"
       , "position" := "absolute"
       ]
-  , uploading: create
-      [ "color" := var tokens.textMuted
-      , "font-size" := "0.8125rem"
-      ]
+  , uploading: mutedText <> ("font-size" := smallText)
   , suggestions: create
       [ "align-items" := "center"
       , "display" := "flex"
       , "flex-wrap" := "wrap"
       , "gap" := var tokens.space2
       ]
-  , suggestion: create
+  , suggestion: pill <> create
       [ "background-color" := var tokens.surface
       , "border-color" := var tokens.border
-      , "border-radius" := "999px"
       , "gap" := "0.4rem"
       , "padding-inline" := "0.3rem 0.75rem"
       ]
@@ -119,7 +108,7 @@ styles =
       , "grid-template-columns" := "auto minmax(0,1fr) auto"
       , "padding-block" := "0.3rem"
       , "padding-inline" := "0.4rem 0.3rem"
-      , "transition" := "border-color 120ms ease,box-shadow 120ms ease"
+      , "transition" := "border-color " <> fastMotion <> " ease,box-shadow " <> fastMotion <> " ease"
       , on Style.FocusWithin
           [ "border-color" := var tokens.accent
           , "box-shadow" := "0 0 0 3px " <> var tokens.accentSoft <> "," <> var tokens.shadow
@@ -137,9 +126,8 @@ styles =
           , "outline" := "none"
           ]
       ]
-  , send: create
+  , send: pill <> create
       [ "block-size" := "2.5rem"
-      , "border-radius" := "999px"
       , "inline-size" := "2.5rem"
       , "min-block-size" := "2.5rem"
       , "padding-block" := "0"

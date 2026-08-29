@@ -14,11 +14,10 @@ import Chat.Session as Session
 import Chat.Page.Browser (NotificationPermission(..), localStorage, location, notificationPermission, requestNotifications)
 import Chat.Page.Room as Room
 import Chat.Room (describeUserNameError, mkUserName, printUserName)
-import Chat.Page.Shared (blank)
 import Chat.Page.Types (App, Joining, Lobby, Locked, SessionAction(..), View(..))
 import Chat.Style.Session (styles)
 import Control.Monad.Error.Class (catchError)
-import Data.Either (Either(..), either)
+import Data.Either (Either(..), either, isLeft)
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String (trim)
 import Effect.Aff (attempt)
@@ -65,7 +64,7 @@ lockedView { passkey, error, busy } = screen $
     , HH.p [ css styles.lead ] [ HH.text "This chat is private. Enter the passkey to continue." ]
     , Field.password field
         [ HP.placeholder "Enter the passkey", HP.autofocus true, HP.value passkey, HE.onValueInput SetPasskey ]
-    , Button.submit (primary { disabled = busy || blank passkey, busy = busy }) []
+    , Button.submit (primary { disabled = busy || trim passkey == "", busy = busy }) []
         [ HH.text if busy then "Checking…" else "Unlock" ]
     ]
   where
@@ -89,7 +88,7 @@ joiningView { name, error } = screen $
     , maybe (HH.text "") (\why -> Status.error [ HH.text why ]) error
     , Field.input ((Field.defaults "chat-name" "Your name") { required = true })
         [ HP.placeholder "Your name", HP.autofocus true, HP.value name, HE.onValueInput SetName ]
-    , Button.submit (primary { disabled = blank name }) [] [ HH.text "Join" ]
+    , Button.submit (primary { disabled = isLeft $ mkUserName name }) [] [ HH.text "Join" ]
     ]
 
 handle :: forall m. MonadAff m => SessionAction -> App m (Maybe RoomId)

@@ -6,6 +6,8 @@ module Chat.Client
   , RoomId
   , connect
   , create
+  , imageEndpoint
+  , imageUrl
   , describeFailure
   , listen
   , open
@@ -16,7 +18,7 @@ module Chat.Client
 
 import Prelude
 
-import Chat.Room (RoomApi, RoomEvents, room)
+import Chat.Room (ImageId, RoomApi, RoomEvents, printImageId, room)
 import Cloudflare.Durable (Namespace, ObjectId, Signal)
 import Cloudflare.Durable as Durable
 import Cloudflare.Durable.Client as Client
@@ -51,6 +53,12 @@ listen (Chat rooms) id tag = makeEmitter $ Durable.listen rooms id tag
 
 printRoomId :: RoomId -> String
 printRoomId = Durable.idToString
+
+imageEndpoint :: RoomId -> String
+imageEndpoint id = "/rpc/Room/id/" <> printRoomId id <> "/http/image"
+
+imageUrl :: RoomId -> ImageId -> String
+imageUrl id image = imageEndpoint id <> "/" <> show (printImageId image)
 
 parseRoomId :: Chat -> String -> Maybe RoomId
 parseRoomId (Chat rooms) raw =

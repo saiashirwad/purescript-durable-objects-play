@@ -15,7 +15,7 @@ import Prelude
 
 import Chat.Client as Client
 import Data.Either (Either)
-import Chat.Room (ImageId, Message, MessageId, NewMessage, RoomEvents, Snapshot, describePostError, describeReactError, printImageId)
+import Chat.Room (ImageId, Message, MessageId, NewMessage, RoomEvents, Snapshot, describePostError, describeReactError)
 import Cloudflare.Durable (Signal)
 import Cloudflare.Durable.Rpc as Rpc
 import Data.Bifunctor (lmap)
@@ -45,7 +45,6 @@ open :: RoomId -> RoomSession
 open id =
   let
     api = Client.open Client.rpc id
-    endpoint = "/rpc/Room/id/" <> Client.printRoomId id <> "/http/image"
   in
     { id
     , listen: Client.listen Client.rpc id
@@ -53,8 +52,8 @@ open id =
     , react: \reaction -> lmap (Client.describeFailure describeReactError) <$> Rpc.run (api.react reaction)
     , snapshot: lmap (Client.describeFailure absurd) <$> Rpc.run (api.snapshot unit)
     , typing: \name -> void $ Rpc.run $ api.typing name
-    , imageEndpoint: endpoint
-    , imageUrl: \image -> endpoint <> "/" <> show (printImageId image)
+    , imageEndpoint: Client.imageEndpoint id
+    , imageUrl: Client.imageUrl id
     }
 
 create :: Aff RoomId
